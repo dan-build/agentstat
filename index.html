@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Real-time LLM agent telemetry — live token rates, progress, status transitions, and health scoring." />
+  <title>AgentStat — real-time LLM agent telemetry</title>
+
+  <!-- Inline SVG favicon: italic serif 'A' to match the wordmark. -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23111111' rx='6'/%3E%3Ctext x='16' y='23' font-family='Ogg, Georgia, serif' font-size='22' font-style='italic' font-weight='300' fill='%23ffffff' text-anchor='middle'%3EA%3C/text%3E%3C/svg%3E" />
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&display=swap');
+
+    /*
+     * Ogg Light Italic is the wordmark font on the docs site.
+     * Drop the file at /public/fonts/ogg-light-italic.woff2 and it's used here.
+     * If absent, the browser falls back to Georgia (system serif italic),
+     * which is visually reasonable until the licensed font is in place.
+     */
+    @font-face {
+      font-family: 'Ogg';
+      font-weight: 300;
+      font-style: italic;
+      font-display: swap;
+      src: url('/fonts/ogg-light-italic.woff2') format('woff2');
+    }
+
+    *,
+    *::before,
+    *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: #fafaf8;
+      font-family: 'IBM Plex Mono', ui-monospace, 'Cascadia Code', monospace;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/dev/main.tsx"></script>
+</body>
+</html>
