@@ -1,0 +1,15 @@
+node_modules
+dist
+.git
+.github
+.vscode
+dev/
+src/__tests__
+*.log
+.DS_Store
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+tsup.config.ts
+vite.config.ts
+repomix-output.*
