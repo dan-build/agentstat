@@ -127,10 +127,10 @@ AgentStat uses Canvas2D and modern CSS color syntax (`rgb(r g b / alpha)`). This
 
 ## Documentation
 
-- [Overview & Features](https://your-docs-site.com/docs)
+- [Overview & Features](https://docs.sdaniel.cc/docs/overview)
 - [Real Data Integration](https://your-docs-site.com/docs/real-data-integration)
-- [API Reference](https://your-docs-site.com/docs/api)
-- [Examples](https://your-docs-site.com/docs/examples)
+- [API Reference](https://docs.sdaniel.cc/docs/api)
+- [Examples](https://docs.sdaniel.cc/docs/examples)
 
 ---
 
