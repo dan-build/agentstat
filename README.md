@@ -101,7 +101,7 @@ export default function MonitoredChat() {
 ```
 
 See the full integration guide for ready-made patterns:  
-**[→ Real Data Integration](https://your-docs-site.com/docs/real-data-integration)** — Vercel AI SDK (`useCompletion`), LangChain / LangGraph, WebSocket / SSE, Model Context Protocol (MCP), VS Code extensions.
+**[→ Real Data Integration](https://docs.sdaniel.cc/docs/real-data-integration)** — Vercel AI SDK (`useCompletion`), LangChain / LangGraph, WebSocket / SSE, Model Context Protocol (MCP), VS Code extensions.
 
 ---
 
