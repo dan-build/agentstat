@@ -8,7 +8,7 @@
 
 import { useEffect, useMemo, useRef } from 'react';
 import { useCompletion } from 'ai/react';
-import { AgentStat, type Agent, type AgentStatRef } from 'agentstat';
+import { AgentStat, type Agent, type AgentStatRef } from '@dan-build/agentstat';
 
 export default function MonitoredChat() {
   const agentStatRef = useRef<AgentStatRef>(null);
