@@ -5,7 +5,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import { AgentStat, createAgent, demoAgents, type Agent } from 'agentstat';
+import { AgentStat, createAgent, demoAgents, type Agent } from '@dan-build/agentstat';
 
 // 1 — Instant demo. Ready-made agents + built-in simulation.
 //     Use this to verify the install works, or as a placeholder while
