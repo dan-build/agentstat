@@ -2,12 +2,12 @@
 
 All notable changes to AgentStat are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [SemVer](https://semver.org/).
 
-## [0.1.1] — 2026-04-20
+## [0.1.1] — 2026-04-21
 
 ### Fixed
 - All install instructions, JSDoc comments, and example imports now use the correct scoped package name `@dan-build/agentstat`.
 
-## [0.1.0] — 2026-04-19
+## [0.1.0] — 2026-04-20
 
 Initial public release.
 
