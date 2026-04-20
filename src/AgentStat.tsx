@@ -238,7 +238,7 @@ export const createAgent = (
  * Pair with `simulateData` to see the chart come to life with zero wiring:
  *
  * ```tsx
- * import { AgentStat, demoAgents } from 'agentstat';
+ * import { AgentStat, demoAgents } from '@dan-build/agentstat';
  * <AgentStat agents={demoAgents} simulateData height={400} />
  * ```
  *
