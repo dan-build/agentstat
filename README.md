@@ -29,14 +29,14 @@ Visually stunning, buttery-smooth performance with Catmull-Rom splines, pulsing 
 ## Quick Start
 
 ```bash
-npm install agentstat
+npm install @dan-build/agentstat
 ```
 
 A live-animating chart in four lines, with the built-in simulation and a ready-made roster of demo agents:
 
 ```tsx
 'use client';
-import { AgentStat, demoAgents } from 'agentstat';
+import { AgentStat, demoAgents } from '@dan-build/agentstat';
 
 export default function Demo() {
   return <AgentStat agents={demoAgents} simulateData height={400} />;
@@ -48,7 +48,7 @@ That's it. No agent objects to construct, no ref, no wiring. Use this to verify 
 When you're ready for your own agents, `createAgent(id, name, color?)` fills in the structural defaults so you only name what matters:
 
 ```tsx
-import { AgentStat, createAgent } from 'agentstat';
+import { AgentStat, createAgent } from '@dan-build/agentstat';
 
 const agents = [
   createAgent('chat-agent', 'Chat Assistant', '#1d4ed8'),
@@ -72,7 +72,7 @@ In production, AgentStat visualises your real telemetry — it does **not** simu
 'use client';
 
 import { useRef } from 'react';
-import { AgentStat, type Agent, type AgentStatRef } from 'agentstat';
+import { AgentStat, type Agent, type AgentStatRef } from '@dan-build/agentstat';
 
 const agent: Agent = {
   id: 'chat-agent',
