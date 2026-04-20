@@ -1,5 +1,5 @@
 {
-  "name": "agentstat",
+  "name": "@dan-build/agentstat",
   "version": "0.1.0",
   "description": "Canvas-rendered React component for real-time LLM agent telemetry — live token rates, progress, status transitions, and health scoring.",
   "author": "dan-build",
