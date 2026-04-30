@@ -101,7 +101,7 @@ export default function MonitoredChat() {
 ```
 
 See the full integration guide for ready-made patterns:  
-**[→ Real Data Integration](https://docs.sdaniel.cc/docs/real-data-integration)** — Vercel AI SDK (`useCompletion`), LangChain / LangGraph, WebSocket / SSE, Model Context Protocol (MCP), VS Code extensions.
+**[→ Real Data Integration](https://agentstat.sdaniel.cc/docs/real-data-integration)** — Vercel AI SDK (`useCompletion`), LangChain / LangGraph, WebSocket / SSE, Model Context Protocol (MCP), VS Code extensions.
 
 ---
 
@@ -127,10 +127,10 @@ AgentStat uses Canvas2D and modern CSS color syntax (`rgb(r g b / alpha)`). This
 
 ## Documentation
 
-- [Overview & Features](https://docs.sdaniel.cc/docs/overview)
-- [Real Data Integration](https://docs.sdaniel.cc/docs/real-data-integration)
-- [API Reference](https://docs.sdaniel.cc/docs/api-reference)
-- [Examples](https://docs.sdaniel.cc/docs/examples)
+- [Overview & Features](https://agentstat.sdaniel.cc/docs/overview)
+- [Real Data Integration](https://agentstat.sdaniel.cc/docs/real-data-integration)
+- [API Reference](https://agentstat.sdaniel.cc/docs/api-reference)
+- [Examples](https://agentstat.sdaniel.cc/docs/examples)
 
 ---
 
