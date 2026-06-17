@@ -2,6 +2,24 @@
 
 All notable changes to AgentStat are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [SemVer](https://semver.org/).
 
+## [0.1.2] — 2026-06-17
+
+### Added
+- `maxHistoryPoints?: number` prop (default: 420) — makes the internal rolling buffer size configurable. Addresses the v0.1 "most recent ~420 samples" limitation and gives consumers control over memory footprint vs. visible history depth for long-running production monitors.
+- `className?: string` and `style?: React.CSSProperties` on the root container — first-class support for design-system integration, Tailwind classes, emotion, etc.
+- Hardened input sanitization in `updateAgent(...)` and the built-in simulator: `tokensRate` is clamped to `≥ 0`; `progress` is clamped to `[0, 100]`. Prevents malformed telemetry from breaking the chart or health math.
+
+### Changed
+- Buffer eviction logic now respects `maxHistoryPoints` everywhere (update path + simulation path).
+- Pause UX is now visually obvious: a subtle "PAUSED" label is drawn directly on the canvas when the chart is paused.
+- Documentation refreshed: README now highlights the new props and updated "History window" guidance; CHANGELOG Known Limitations section revised to reflect configurability.
+
+### Fixed / Robustness
+- Minor hardening around short/empty buffers in health scoring and drawing (no behavior change for normal usage).
+- All existing tests continue to pass; new props are covered by expanded type surface and manual verification paths.
+
+This is a focused **professionalization and robustness release**. No breaking changes. The component is now even easier to drop into real production dashboards while giving power users the dials they asked for.
+
 ## [0.1.1] — 2026-04-21
 
 ### Fixed
