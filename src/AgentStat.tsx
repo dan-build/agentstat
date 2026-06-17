@@ -73,6 +73,17 @@ export interface AgentStatProps {
     textColor?: string;
     gridColor?: string;
   };
+  /** CSS class name applied to the root container div. */
+  className?: string;
+  /** Inline styles applied to the root container div (merged with internal positioning). */
+  style?: React.CSSProperties;
+  /**
+   * Maximum number of historical data points kept per agent (rolling buffer).
+   * Default 420 ≈ 20–80s of history depending on your `updateAgent` call rate.
+   * Lower values reduce memory; higher values give longer visible history.
+   * Planned for v0.2: time-based windowing on top of this cap.
+   */
+  maxHistoryPoints?: number;
 }
 
 export interface AgentStatRef {
@@ -90,13 +101,7 @@ export interface AgentStatRef {
 const lerp = (start: number, end: number, t: number): number =>
   start + (end - start) * t;
 
-/**
- * Health calculation now accepts the live rate buffer so stability
- * is computed from real data — not from agent.data which is always empty.
- *
- * Exported for unit testing — not re-exported from the package entry
- * (src/index.ts), so consumers don't see this as public API.
- */
+
 export const calculateHealth = (agent: Agent, recentRates: number[]): HealthMetrics => {
   const { current, config } = agent;
 
@@ -133,19 +138,6 @@ export const calculateHealth = (agent: Agent, recentRates: number[]): HealthMetr
         : 'stable'
       : 'stable';
 
-  // Weighted composite score. The four dimensions nominally carry weights that
-  // sum to 1.0, but the latency dimension only contributes a signal when the
-  // consumer actually supplied `latencyMs`. Two cases:
-  //
-  //   1. latencyMs is undefined: we have no latency signal, so we drop the 0.1
-  //      latency weight entirely and renormalize the remaining three weights.
-  //      A perfectly-healthy agent with no latency data thus reaches 100 —
-  //      not the ~90 cap the old formula produced.
-  //
-  //   2. latencyMs is defined: score latency on the same 0–100 scale as the
-  //      other dimensions (improving=100, stable=50, degrading=0), then apply
-  //      its 0.1 weight. Perfect + improving latency reaches 100; perfect +
-  //      stable latency reaches 95; perfect + degrading latency reaches 90.
   const base =
     tokenEfficiency * 0.35 +
     stability * 0.25 +
@@ -238,7 +230,7 @@ export const createAgent = (
  * Pair with `simulateData` to see the chart come to life with zero wiring:
  *
  * ```tsx
- * import { AgentStat, demoAgents } from '@dan-build/agentstat';
+ * import { AgentStat, demoAgents } from 'agentstat';
  * <AgentStat agents={demoAgents} simulateData height={400} />
  * ```
  *
@@ -282,10 +274,7 @@ export const demoAgents: Agent[] = [
 const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
   (
     {
-      // Default to [] so the component is robust to a missing/undefined
-      // `agents` prop. This happens in practice when consumers render the
-      // component before their data has loaded, during SSR streaming, or
-      // from plain JavaScript (where TypeScript can't enforce the prop).
+     
       agents: initialAgents = [],
       height = 520,
       referenceLine,
@@ -293,6 +282,9 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
       onSpikeClick,
       simulateData = false,
       styles = {},
+      className,
+      style: rootStyle,
+      maxHistoryPoints = 420,
     },
     ref
   ) => {
@@ -303,8 +295,7 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
     const dprRef = useRef<number>(1);
 
     // ── Canonical data store ──────────────────────────────────────────────────
-    // The animation loop reads from these refs only — never from React state.
-    // This keeps animate() stable (no deps) so the RAF loop never restarts.
+    
     const agentsRef = useRef<Agent[]>(initialAgents);
     const progressBufferRef = useRef<Map<string, number[]>>(new Map());
     const tokensBufferRef = useRef<Map<string, number[]>>(new Map());
@@ -313,17 +304,16 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
     >(new Map());
     const healthCacheRef = useRef<Record<string, HealthMetrics>>({});
     const pausedRef = useRef<boolean>(false);
-    // Tracks agent ids whose anomalous status was set by the consumer
-    // (via updateAgent). The simulation tick respects this lock and will not
-    // auto-recover these agents. Cleared the moment updateAgent is called
-    // with a non-anomalous status.
+    
     const userLockedRef = useRef<Set<string>>(new Set());
 
     // Prop refs — animate reads styles and referenceLine without needing them as deps.
     const stylesRef = useRef(styles);
     const referenceLineRef = useRef(referenceLine);
+    const maxHistoryPointsRef = useRef(maxHistoryPoints);
     useEffect(() => { stylesRef.current = styles; }, [styles]);
     useEffect(() => { referenceLineRef.current = referenceLine; }, [referenceLine]);
+    useEffect(() => { maxHistoryPointsRef.current = maxHistoryPoints; }, [maxHistoryPoints]);
 
     // Callback refs — stable references to the latest callbacks.
     const onHealthChangeRef = useRef(onHealthChange);
@@ -393,11 +383,7 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
       // idempotent — it's a no-op for ids whose buffers are already set).
       initialAgents.forEach(ensureBuffers);
 
-      // Shape-compare: same length AND same ids in same order.
-      // If a consumer passes a fresh array literal each render but the roster is
-      // unchanged, this guard prevents clobbering live ref-side mutations from
-      // updateAgent(). Property changes on existing agents (color, config, etc.)
-      // are intentionally ignored here — use updateAgent() for runtime updates.
+      
       const prevIds = agentsRef.current.map((a) => a.id);
       const nextIds = initialAgents.map((a) => a.id);
       const shapeUnchanged =
@@ -405,8 +391,7 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
         prevIds.every((id, i) => id === nextIds[i]);
       if (shapeUnchanged) return;
 
-      // Shape changed. Prune per-agent state for removed ids so the refs don't
-      // leak entries for agents the consumer no longer tracks.
+      
       const nextSet = new Set(nextIds);
       prevIds.forEach((id) => {
         if (!nextSet.has(id)) {
@@ -418,9 +403,7 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
         }
       });
 
-      // Merge: kept ids keep their ref-side state (preserves updateAgent
-      // mutations); new ids take the parent's incoming agent as-is. Order
-      // follows the parent's new array.
+      
       const prevById = new Map(agentsRef.current.map((a) => [a.id, a]));
       const merged = initialAgents.map((a) => prevById.get(a.id) ?? a);
       agentsRef.current = merged;
@@ -437,9 +420,7 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
           progress: number,
           status: AgentStatus
         ) => {
-          // Lock anomalous user-triggered statuses so the simulation's
-          // auto-recovery doesn't flip them back to 'active' after ~3s.
-          // Any non-anomalous status from the consumer clears the lock.
+          
           if (status === 'stuck' || status === 'hallucinating') {
             userLockedRef.current.add(id);
           } else {
@@ -450,15 +431,19 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
             if (agent.id !== id) return agent;
             const progressBuf = progressBufferRef.current.get(id) || [];
             const tokensBuf = tokensBufferRef.current.get(id) || [];
-            progressBuf.push(progress);
-            tokensBuf.push(tokensRate);
-            if (progressBuf.length > 420) progressBuf.shift();
-            if (tokensBuf.length > 420) tokensBuf.shift();
+            // Clamp for robustness — bad telemetry from consumers should never break the chart
+            const safeTokens = Math.max(0, tokensRate);
+            const safeProgress = Math.max(0, Math.min(100, progress));
+            progressBuf.push(safeProgress);
+            tokensBuf.push(safeTokens);
+            const maxPts = maxHistoryPointsRef.current;
+            if (progressBuf.length > maxPts) progressBuf.shift();
+            if (tokensBuf.length > maxPts) tokensBuf.shift();
             progressBufferRef.current.set(id, progressBuf);
             tokensBufferRef.current.set(id, tokensBuf);
             return {
               ...agent,
-              current: { ...agent.current, tokensRate, progress, status },
+              current: { ...agent.current, tokensRate: safeTokens, progress: safeProgress, status },
             };
           });
         },
@@ -479,11 +464,10 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
           const status = agent.current.status;
 
           // ── Anomaly entry / auto-recovery ──────────────────────────────
-          // errorCount reused as anomaly tick counter.
+         
           const inAnomaly = status === 'stuck' || status === 'hallucinating';
           const anomalyTick = agent.current.errorCount ?? 0;
-          // User has pinned this agent's status via updateAgent — the sim
-          // must not auto-recover it or randomly flip it into a new anomaly.
+          
           const userLocked = userLockedRef.current.has(agent.id);
 
           let nextStatus = status;
@@ -541,8 +525,9 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
           const tokensBuf = tokensBufferRef.current.get(agent.id) || [];
           progressBuf.push(newProgress);
           tokensBuf.push(newTokens);
-          if (progressBuf.length > 420) progressBuf.shift();
-          if (tokensBuf.length > 420) tokensBuf.shift();
+          const maxPts = maxHistoryPointsRef.current;
+          if (progressBuf.length > maxPts) progressBuf.shift();
+          if (tokensBuf.length > maxPts) tokensBuf.shift();
           progressBufferRef.current.set(agent.id, progressBuf);
           tokensBufferRef.current.set(agent.id, tokensBuf);
 
@@ -594,9 +579,7 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
       if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }, []);
 
-    // ── Animation loop ────────────────────────────────────────────────────────
-    // STABLE — empty deps array means this is created once and never recreated.
-    // All data comes from refs. The RAF loop runs for the full component lifetime.
+    
     const animate = useCallback(() => {
       const canvas = canvasRef.current;
       if (!canvas) return;
@@ -608,8 +591,7 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
       lastTimeRef.current = now;
 
       const dpr = dprRef.current;
-      // All drawing coordinates are in CSS pixels thanks to setTransform(dpr,...).
-      // We must use cssWidth/cssHeight here — canvas.width is physical pixels.
+      
       const cssWidth = canvas.width / dpr;
       const cssHeight = canvas.height / dpr;
 
@@ -740,6 +722,15 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
         ctx.fill();
       });
 
+      // Professional paused-state indicator (drawn on-canvas so it survives
+      // any parent re-renders and is pixel-perfect with the chart).
+      if (pausedRef.current) {
+        ctx.fillStyle = darkBg ? 'rgba(255,255,255,0.65)' : 'rgba(0,0,0,0.65)';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText('PAUSED', cssWidth - pad.right - 6, pad.top + 12);
+      }
+
       animationRef.current = requestAnimationFrame(animate);
     }, []); // ← intentionally empty: reads exclusively from refs
 
@@ -852,9 +843,11 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
     }.`;
 
     return (
-      <div style={{ width: '100%', height, position: 'relative' }}>
-        {/* Scoped focus ring — :focus-visible only applies for keyboard focus,
-            so mouse clicks on the canvas don't trigger a visible outline. */}
+      <div
+        className={className}
+        style={{ width: '100%', height, position: 'relative', ...rootStyle }}
+      >
+        
         <style>{`.agentstat-canvas:focus-visible{outline:2px solid #3b82f6;outline-offset:2px;}`}</style>
         <canvas
           ref={canvasRef}
