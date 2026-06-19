@@ -10,11 +10,22 @@ import React, {
   useMemo,
 } from 'react';
 
+import { TimeSeriesBuffer } from './timeseries';
+import { StatusLog } from './statuslog';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type AgentStatus = 'active' | 'stuck' | 'thinking' | 'complete' | 'hallucinating';
+
+/**
+ * Which series the chart plots on the primary visual.
+ * - 'progress' (default): the historical 0–100% progress curve (v0.1 behavior).
+ * - 'tokens': the token-rate curve on a data-driven auto-scaled axis.
+ * - 'both': progress on the left axis, token rate on the right (dual-axis).
+ */
+export type ChartMetric = 'progress' | 'tokens' | 'both';
 
 export type AgentDataPoint = {
   time: number;
@@ -84,6 +95,40 @@ export interface AgentStatProps {
    * Planned for v0.2: time-based windowing on top of this cap.
    */
   maxHistoryPoints?: number;
+  /**
+   * Which series to plot. Default 'progress' preserves v0.1 behavior exactly.
+   * 'tokens' plots token rate on an auto-scaled axis; 'both' shows progress on
+   * the left axis and token rate on the right (dual-axis).
+   */
+  metric?: ChartMetric;
+  /**
+   * Upper bound for the token-rate axis. By default the axis auto-scales to the
+   * highest token rate currently visible (with headroom), so a quiet agent and a
+   * fast one are both legible. Pass a fixed number to pin the axis — useful when
+   * you want a stable scale across mounts or known rate ceilings.
+   */
+  tokenAxisMax?: number;
+  /**
+   * Show only the last `windowSeconds` of history (time-based sliding window),
+   * independent of sample count. When set, the chart slices each agent's buffer
+   * to this window before drawing and downsamples (LTTB) if the slice has far
+   * more points than the canvas can resolve. Leave undefined for the legacy
+   * count-based view bounded by `maxHistoryPoints`.
+   */
+  windowSeconds?: number;
+  /**
+   * Optional visual smoothing of the **rendered line only**, in [0, 1).
+   * 0 (default) = OFF: the line shows raw values exactly. Higher values apply an
+   * exponential moving average to the drawn curve, damping frame-to-frame jitter
+   * from noisy metrics. ~0.2–0.4 is a gentle smooth; 0.6+ is heavy.
+   *
+   * IMPORTANT — this is a *display* choice and it DAMPS REAL SPIKES. AgentStat is
+   * a monitoring tool; a genuine token-rate anomaly will be visually softened
+   * when smoothing is on. Health scoring and hover tooltip values always read
+   * the RAW data and are never affected — only the drawn curve is. Leave at 0 if
+   * faithfully seeing every spike matters more than a calm line.
+   */
+  smoothing?: number;
 }
 
 export interface AgentStatRef {
@@ -101,7 +146,52 @@ export interface AgentStatRef {
 const lerp = (start: number, end: number, t: number): number =>
   start + (end - start) * t;
 
+/**
+ * Display-only exponential moving average over a point series' values. Returns
+ * a NEW array; never mutates input. `factor` in [0,1): 0 returns points
+ * unchanged. Smooths the rendered curve without touching stored data — callers
+ * apply this to the draw points only, never to the buffer, health, or tooltip.
+ */
+const emaPoints = (
+  pts: { t: number; v: number }[],
+  factor: number
+): { t: number; v: number }[] => {
+  if (factor <= 0 || pts.length === 0) return pts;
+  const a = Math.min(0.95, factor); // guard: never fully freeze the line
+  const out = new Array(pts.length);
+  let prev = pts[0].v;
+  out[0] = pts[0];
+  for (let i = 1; i < pts.length; i++) {
+    prev = prev * a + pts[i].v * (1 - a);
+    out[i] = { t: pts[i].t, v: prev };
+  }
+  return out;
+};
 
+/**
+ * Round an upper bound up to a visually "nice" axis maximum (1/2/5 × 10ⁿ),
+ * so the token-rate axis shows clean labels (e.g. 20, 50, 100) rather than
+ * arbitrary values like 37.4. Always returns at least `floor`.
+ *
+ * Exported for unit testing — NOT re-exported from the package entry
+ * (src/index.ts), so it isn't public API. Mirrors the calculateHealth convention.
+ */
+export const niceMax = (raw: number, floor = 10): number => {
+  const v = Math.max(raw, floor);
+  const exp = Math.floor(Math.log10(v));
+  const base = Math.pow(10, exp);
+  const frac = v / base;
+  const niceFrac = frac <= 1 ? 1 : frac <= 2 ? 2 : frac <= 5 ? 5 : 10;
+  return niceFrac * base;
+};
+
+/**
+ * Health calculation now accepts the live rate buffer so stability
+ * is computed from real data — not from agent.data which is always empty.
+ *
+ * Exported for unit testing — not re-exported from the package entry
+ * (src/index.ts), so consumers don't see this as public API.
+ */
 export const calculateHealth = (agent: Agent, recentRates: number[]): HealthMetrics => {
   const { current, config } = agent;
 
@@ -274,7 +364,10 @@ export const demoAgents: Agent[] = [
 const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
   (
     {
-     
+      // Default to [] so the component is robust to a missing/undefined
+      // `agents` prop. This happens in practice when consumers render the
+      // component before their data has loaded, during SSR streaming, or
+      // from plain JavaScript (where TypeScript can't enforce the prop).
       agents: initialAgents = [],
       height = 520,
       referenceLine,
@@ -285,35 +378,81 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
       className,
       style: rootStyle,
       maxHistoryPoints = 420,
+      metric = 'progress',
+      tokenAxisMax,
+      windowSeconds,
+      smoothing = 0,
     },
     ref
   ) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    // Cache the 2D context. getContext returns the same object on repeat calls
+    // for a given canvas, but caching avoids the per-frame call entirely and
+    // gives us one place to bail if the context is unavailable.
+    const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
+    // Per-frame-stable gradient cache. Gradients depend only on geometry
+    // (vertical extent) and agent color, none of which change frame-to-frame
+    // unless the canvas resizes. Keyed so a resize or color change rebuilds.
+    const gradientCacheRef = useRef<{
+      key: string;
+      fills: Map<string, CanvasGradient>;
+    }>({ key: '', fills: new Map() });
     const animationRef = useRef<number>();
     const lastTimeRef = useRef<number>(performance.now());
     // DPR stored in a ref so the stable animate closure always has the latest value.
     const dprRef = useRef<number>(1);
 
     // ── Canonical data store ──────────────────────────────────────────────────
-    
+    // The animation loop reads from these refs only — never from React state.
+    // This keeps animate() stable (no deps) so the RAF loop never restarts.
     const agentsRef = useRef<Agent[]>(initialAgents);
-    const progressBufferRef = useRef<Map<string, number[]>>(new Map());
-    const tokensBufferRef = useRef<Map<string, number[]>>(new Map());
+    const progressBufferRef = useRef<Map<string, TimeSeriesBuffer>>(new Map());
+    const tokensBufferRef = useRef<Map<string, TimeSeriesBuffer>>(new Map());
+    // Sparse per-agent status transition history (records only changes).
+    const statusLogRef = useRef<Map<string, StatusLog>>(new Map());
     const liveValuesRef = useRef<
       Map<string, { tokensRate: number; progress: number; status: AgentStatus }>
     >(new Map());
     const healthCacheRef = useRef<Record<string, HealthMetrics>>({});
     const pausedRef = useRef<boolean>(false);
-    
+    // Dirty-frame tracking. The RAF loop keeps running (invariant: never
+    // restarts), but it skips the expensive redraw when nothing changed —
+    // otherwise the canvas repaints 60×/sec even while idle, saturating the
+    // main thread and starving user input (observed as high INP / input delay).
+    // `dirtyRef` is raised by any data write; the loop also redraws while lines
+    // are still animating toward their targets, and (throttled) while a time
+    // window scrolls.
+    const dirtyRef = useRef<boolean>(true);
+    const lastDrawRef = useRef<number>(0);
+    // Tracks agent ids whose anomalous status was set by the consumer
+    // (via updateAgent). The simulation tick respects this lock and will not
+    // auto-recover these agents. Cleared the moment updateAgent is called
+    // with a non-anomalous status.
     const userLockedRef = useRef<Set<string>>(new Set());
 
     // Prop refs — animate reads styles and referenceLine without needing them as deps.
     const stylesRef = useRef(styles);
     const referenceLineRef = useRef(referenceLine);
     const maxHistoryPointsRef = useRef(maxHistoryPoints);
+    const metricRef = useRef(metric);
+    const tokenAxisMaxRef = useRef(tokenAxisMax);
+    const windowSecondsRef = useRef(windowSeconds);
+    const smoothingRef = useRef(smoothing);
+    // Cached token-axis ceiling + the time bucket it was computed for, so the
+    // O(points) max-scan runs at most a few times per second instead of every
+    // frame. Recomputing every frame was the dominant cost in tokens/both mode
+    // and also caused the whole chart to visibly rescale on each frame.
+    const tokenMaxCacheRef = useRef<{ bucket: number; value: number }>({
+      bucket: -1,
+      value: 0,
+    });
     useEffect(() => { stylesRef.current = styles; }, [styles]);
     useEffect(() => { referenceLineRef.current = referenceLine; }, [referenceLine]);
     useEffect(() => { maxHistoryPointsRef.current = maxHistoryPoints; }, [maxHistoryPoints]);
+    useEffect(() => { metricRef.current = metric; dirtyRef.current = true; }, [metric]);
+    useEffect(() => { tokenAxisMaxRef.current = tokenAxisMax; dirtyRef.current = true; }, [tokenAxisMax]);
+    useEffect(() => { windowSecondsRef.current = windowSeconds; dirtyRef.current = true; }, [windowSeconds]);
+    useEffect(() => { smoothingRef.current = smoothing; dirtyRef.current = true; }, [smoothing]);
 
     // Callback refs — stable references to the latest callbacks.
     const onHealthChangeRef = useRef(onHealthChange);
@@ -367,14 +506,26 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
     // ── Buffer init ───────────────────────────────────────────────────────────
     const ensureBuffers = useCallback((agent: Agent) => {
       if (!progressBufferRef.current.has(agent.id)) {
-        progressBufferRef.current.set(
-          agent.id,
-          Array(80).fill(agent.current.progress)
-        );
-        tokensBufferRef.current.set(
-          agent.id,
-          Array(80).fill(agent.current.tokensRate)
-        );
+        const cap = Math.max(2, maxHistoryPointsRef.current);
+        const pBuf = new TimeSeriesBuffer(Math.max(cap, 20_000));
+        const tBuf = new TimeSeriesBuffer(Math.max(cap, 20_000));
+        // Seed ~80 backdated samples so the line has initial shape on first
+        // paint instead of popping in from a single point. Spaced 55ms apart
+        // (the sim tick), ending "now", so they fall within typical windows.
+        const now = performance.now();
+        const seedCount = 80;
+        for (let i = seedCount - 1; i >= 0; i--) {
+          const t = now - i * 55;
+          pBuf.push(t, agent.current.progress);
+          tBuf.push(t, agent.current.tokensRate);
+        }
+        progressBufferRef.current.set(agent.id, pBuf);
+        tokensBufferRef.current.set(agent.id, tBuf);
+        // Seed the status log with the agent's initial status at the buffer's
+        // start time, so statusAt() answers correctly across the seeded span.
+        const sLog = new StatusLog();
+        sLog.record(now - (seedCount - 1) * 55, agent.current.status);
+        statusLogRef.current.set(agent.id, sLog);
       }
     }, []);
 
@@ -383,7 +534,11 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
       // idempotent — it's a no-op for ids whose buffers are already set).
       initialAgents.forEach(ensureBuffers);
 
-      
+      // Shape-compare: same length AND same ids in same order.
+      // If a consumer passes a fresh array literal each render but the roster is
+      // unchanged, this guard prevents clobbering live ref-side mutations from
+      // updateAgent(). Property changes on existing agents (color, config, etc.)
+      // are intentionally ignored here — use updateAgent() for runtime updates.
       const prevIds = agentsRef.current.map((a) => a.id);
       const nextIds = initialAgents.map((a) => a.id);
       const shapeUnchanged =
@@ -391,19 +546,23 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
         prevIds.every((id, i) => id === nextIds[i]);
       if (shapeUnchanged) return;
 
-      
+      // Shape changed. Prune per-agent state for removed ids so the refs don't
+      // leak entries for agents the consumer no longer tracks.
       const nextSet = new Set(nextIds);
       prevIds.forEach((id) => {
         if (!nextSet.has(id)) {
           progressBufferRef.current.delete(id);
           tokensBufferRef.current.delete(id);
+          statusLogRef.current.delete(id);
           liveValuesRef.current.delete(id);
           delete healthCacheRef.current[id];
           userLockedRef.current.delete(id);
         }
       });
 
-      
+      // Merge: kept ids keep their ref-side state (preserves updateAgent
+      // mutations); new ids take the parent's incoming agent as-is. Order
+      // follows the parent's new array.
       const prevById = new Map(agentsRef.current.map((a) => [a.id, a]));
       const merged = initialAgents.map((a) => prevById.get(a.id) ?? a);
       agentsRef.current = merged;
@@ -420,7 +579,9 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
           progress: number,
           status: AgentStatus
         ) => {
-          
+          // Lock anomalous user-triggered statuses so the simulation's
+          // auto-recovery doesn't flip them back to 'active' after ~3s.
+          // Any non-anomalous status from the consumer clears the lock.
           if (status === 'stuck' || status === 'hallucinating') {
             userLockedRef.current.add(id);
           } else {
@@ -429,18 +590,26 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
           // Write directly to the ref — animation picks it up on the next frame.
           agentsRef.current = agentsRef.current.map((agent) => {
             if (agent.id !== id) return agent;
-            const progressBuf = progressBufferRef.current.get(id) || [];
-            const tokensBuf = tokensBufferRef.current.get(id) || [];
+            const progressBuf = progressBufferRef.current.get(id);
+            const tokensBuf = tokensBufferRef.current.get(id);
+            if (!progressBuf || !tokensBuf) return agent;
             // Clamp for robustness — bad telemetry from consumers should never break the chart
             const safeTokens = Math.max(0, tokensRate);
             const safeProgress = Math.max(0, Math.min(100, progress));
-            progressBuf.push(safeProgress);
-            tokensBuf.push(safeTokens);
-            const maxPts = maxHistoryPointsRef.current;
-            if (progressBuf.length > maxPts) progressBuf.shift();
-            if (tokensBuf.length > maxPts) tokensBuf.shift();
-            progressBufferRef.current.set(id, progressBuf);
-            tokensBufferRef.current.set(id, tokensBuf);
+            const now = performance.now();
+            progressBuf.push(now, safeProgress);
+            tokensBuf.push(now, safeTokens);
+            statusLogRef.current.get(id)?.record(now, status);
+            dirtyRef.current = true;
+            // Count cap is enforced inside the buffer (hardCap); when a time
+            // window is active we also evict by time so memory tracks the window.
+            const winS = windowSecondsRef.current;
+            if (winS !== undefined) {
+              const retain = winS * 1000 * 1.5; // keep 1.5× the visible window
+              progressBuf.evictOlderThan(now, retain);
+              tokensBuf.evictOlderThan(now, retain);
+              statusLogRef.current.get(id)?.evictOlderThan(now - retain);
+            }
             return {
               ...agent,
               current: { ...agent.current, tokensRate: safeTokens, progress: safeProgress, status },
@@ -464,10 +633,11 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
           const status = agent.current.status;
 
           // ── Anomaly entry / auto-recovery ──────────────────────────────
-         
+          // errorCount reused as anomaly tick counter.
           const inAnomaly = status === 'stuck' || status === 'hallucinating';
           const anomalyTick = agent.current.errorCount ?? 0;
-          
+          // User has pinned this agent's status via updateAgent — the sim
+          // must not auto-recover it or randomly flip it into a new anomaly.
           const userLocked = userLockedRef.current.has(agent.id);
 
           let nextStatus = status;
@@ -521,15 +691,22 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
           // Stable 0.95 prevents score jitter during normal operation.
           const nextConfidence = inAnomaly ? Math.random() * 0.35 : 0.95;
 
-          const progressBuf = progressBufferRef.current.get(agent.id) || [];
-          const tokensBuf = tokensBufferRef.current.get(agent.id) || [];
-          progressBuf.push(newProgress);
-          tokensBuf.push(newTokens);
-          const maxPts = maxHistoryPointsRef.current;
-          if (progressBuf.length > maxPts) progressBuf.shift();
-          if (tokensBuf.length > maxPts) tokensBuf.shift();
-          progressBufferRef.current.set(agent.id, progressBuf);
-          tokensBufferRef.current.set(agent.id, tokensBuf);
+          const progressBuf = progressBufferRef.current.get(agent.id);
+          const tokensBuf = tokensBufferRef.current.get(agent.id);
+          if (progressBuf && tokensBuf) {
+            const now = performance.now();
+            progressBuf.push(now, newProgress);
+            tokensBuf.push(now, newTokens);
+            statusLogRef.current.get(agent.id)?.record(now, nextStatus);
+            dirtyRef.current = true;
+            const winS = windowSecondsRef.current;
+            if (winS !== undefined) {
+              const retain = winS * 1000 * 1.5;
+              progressBuf.evictOlderThan(now, retain);
+              tokensBuf.evictOlderThan(now, retain);
+              statusLogRef.current.get(agent.id)?.evictOlderThan(now - retain);
+            }
+          }
 
           return {
             ...agent,
@@ -554,7 +731,7 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
         setUiAgents([...current]);
         current.forEach((agent) => {
           if (!agent.visible) return;
-          const rates = tokensBufferRef.current.get(agent.id) || [];
+          const rates = tokensBufferRef.current.get(agent.id)?.values() ?? [];
           const health = calculateHealth(agent, rates);
           const cached = healthCacheRef.current[agent.id];
           if (!cached || Math.abs(cached.score - health.score) > 1) {
@@ -576,22 +753,134 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
       canvas.width = rect.width * dpr;
       canvas.height = rect.height * dpr;
       const ctx = canvas.getContext('2d');
+      ctxRef.current = ctx;
       if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      dirtyRef.current = true; // geometry changed — force a redraw
     }, []);
 
-    
+    // Shared scale derivation — used by BOTH the animation draw loop and the
+    // hover hit-test so they can never compute different y-coordinates for the
+    // same data point. Reads exclusively from refs. Declared before animate so
+    // animate can list it as a (ref-stable) dependency.
+    const deriveScale = useCallback((h: number, padTop: number, scanTarget = 256) => {
+      const metric = metricRef.current;
+      const primaryIsTokens = metric === 'tokens';
+      let tokenMax = tokenAxisMaxRef.current;
+      if (tokenMax === undefined) {
+        const now = performance.now();
+        const winMs =
+          windowSecondsRef.current !== undefined
+            ? windowSecondsRef.current * 1000
+            : undefined;
+        // Recompute the axis max at most ~4×/sec (250ms buckets), not every
+        // frame. Between recomputes we reuse the cached ceiling — the max of a
+        // live stream doesn't change meaningfully frame-to-frame, and a stable
+        // axis also stops the chart from visibly rescaling on every tick.
+        const bucket = Math.floor(now / 250);
+        const cache = tokenMaxCacheRef.current;
+        if (bucket !== cache.bucket) {
+          let observed = 0;
+          // Scan using the SAME targetPoints + recomputeMs the draw loop uses,
+          // so this call HITS the draw's downsample cache instead of evicting it.
+          // (Using a different target here caused per-frame cache thrash — two
+          // full LTTB passes per buffer per frame — which was the dominant
+          // tokens/both-mode cost. Measured ~178× worse than sharing the cache.)
+          const recMs =
+            winMs !== undefined ? Math.max(16, winMs * 0.005) : 250;
+          agentsRef.current.forEach((agent) => {
+            if (!agent.visible) return;
+            const buf = tokensBufferRef.current.get(agent.id);
+            if (!buf) return;
+            const pts = buf.windowed(now, winMs, scanTarget, recMs).points;
+            for (let i = 0; i < pts.length; i++) {
+              if (pts[i].v > observed) observed = pts[i].v;
+            }
+            if (agent.current.tokensRate > observed) observed = agent.current.tokensRate;
+          });
+          const fresh = niceMax(observed * 1.1);
+          // Hysteresis: only adopt a new ceiling if it differs enough, so small
+          // wobbles in the max don't nudge the axis (and force a redraw scale).
+          if (
+            cache.value === 0 ||
+            fresh > cache.value ||
+            fresh < cache.value * 0.7
+          ) {
+            cache.value = fresh;
+          }
+          cache.bucket = bucket;
+        }
+        tokenMax = cache.value;
+      }
+      const safeTokenMax = tokenMax && tokenMax > 0 ? tokenMax : 100;
+      const primaryToY = primaryIsTokens
+        ? (v: number) =>
+            padTop + h - (h * Math.max(0, Math.min(safeTokenMax, v))) / safeTokenMax
+        : (v: number) => padTop + h - (h * v) / 100;
+      return {
+        primaryIsTokens,
+        primaryBufferRef: primaryIsTokens ? tokensBufferRef : progressBufferRef,
+        primaryToY,
+        safeTokenMax,
+      };
+    }, []);
+
+    // ── Animation loop ────────────────────────────────────────────────────────
+    // STABLE — empty deps array means this is created once and never recreated.
+    // All data comes from refs. The RAF loop runs for the full component lifetime.
     const animate = useCallback(() => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const ctx = canvas.getContext('2d');
+      // Use the cached context; fall back to a one-time fetch if animate runs
+      // before resizeCanvas has populated it (e.g. first frame after mount).
+      let ctx = ctxRef.current;
+      if (!ctx) {
+        ctx = canvas.getContext('2d');
+        ctxRef.current = ctx;
+      }
       if (!ctx) return;
 
       const now = performance.now();
       const delta = Math.min((now - lastTimeRef.current) / 16.67, 2.5);
       lastTimeRef.current = now;
 
+      // ── Dirty check: should we actually redraw this frame? ──────────────────
+      // Redraw when: new data arrived (dirtyRef), any line is still animating
+      // toward its target, a time window is scrolling, or the chart is paused
+      // (so the PAUSED overlay paints once). Otherwise skip the costly draw and
+      // just reschedule — this is what frees the main thread between updates and
+      // fixes the input-delay/INP problem.
+      const EPS = 0.05;
+      let stillAnimating = false;
+      const liveMap = liveValuesRef.current;
+      for (const agent of agentsRef.current) {
+        const lv = liveMap.get(agent.id);
+        if (!lv) {
+          stillAnimating = true;
+          break;
+        }
+        if (
+          Math.abs(lv.progress - agent.current.progress) > EPS ||
+          Math.abs(lv.tokensRate - agent.current.tokensRate) > EPS
+        ) {
+          stillAnimating = true;
+          break;
+        }
+      }
+      // A live time window scrolls continuously, so it must keep redrawing — but
+      // 30fps is plenty for a sliding axis, so throttle it rather than run at 60.
+      const windowScrolling = windowSecondsRef.current !== undefined;
+      const windowDue = windowScrolling && now - lastDrawRef.current >= 33;
+
+      if (!dirtyRef.current && !stillAnimating && !windowDue) {
+        animationRef.current = requestAnimationFrame(animate);
+        return;
+      }
+      dirtyRef.current = false;
+      lastDrawRef.current = now;
+
       const dpr = dprRef.current;
-      
+      // All drawing coordinates are in CSS pixels thanks to setTransform(dpr,...).
+      // We must use cssWidth/cssHeight here — canvas.width is physical pixels.
       const cssWidth = canvas.width / dpr;
       const cssHeight = canvas.height / dpr;
 
@@ -604,6 +893,39 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
       const pad = { left: 56, right: 48, top: 40, bottom: 56 };
       const w = cssWidth - pad.left - pad.right;
       const h = cssHeight - pad.top - pad.bottom;
+      // Shared spline density, computed once. Passed into deriveScale so the
+      // token-axis scan reuses the same downsample cache the draw loop fills
+      // (avoids per-frame cache thrash). Also used directly by the draw below.
+      const drawTargetPoints = Math.max(8, Math.ceil(w / 2));
+
+      // Gradient cache. Both the line and fill gradients depend on geometry
+      // (which only changes on resize) and agent color. We key the whole cache
+      // on geometry and clear it when geometry changes; within a stable
+      // geometry, each agent's gradients are built once and reused every frame.
+      const geomKey = `${pad.top}:${h}:${pad.left}:${cssWidth - pad.right}`;
+      const gcache = gradientCacheRef.current;
+      if (gcache.key !== geomKey) {
+        gcache.key = geomKey;
+        gcache.fills.clear();
+      }
+      const fillCache = gcache.fills;
+
+      // ── Metric + axis scaling ───────────────────────────────────────────────
+      // The chart can plot progress (fixed 0–100), token rate (auto-scaled), or
+      // both (dual-axis). All value→Y conversions below route through the scale
+      // functions defined here so the drawn line, the live dot, the axis labels,
+      // and the hover hit-test can never use different scales.
+      const metric = metricRef.current;
+      const showProgress = metric === 'progress' || metric === 'both';
+
+      // Single source of truth for scale math (shared with the hover hit-test).
+      const { primaryIsTokens, primaryBufferRef, primaryToY, safeTokenMax } =
+        deriveScale(h, pad.top, drawTargetPoints);
+
+      const progressToY = (v: number) => pad.top + h - (h * v) / 100;
+      const tokenToY = (v: number) =>
+        pad.top + h - (h * Math.max(0, Math.min(safeTokenMax, v))) / safeTokenMax;
+
 
       // Y-axis labels + grid lines
       ctx.font = '10px monospace';
@@ -612,10 +934,26 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
       const gridColor =
         s.gridColor || (darkBg ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)');
 
-      [100, 75, 50, 25, 0].forEach((v) => {
-        const y = pad.top + h - (h * v) / 100;
+      // Left axis labels: progress (%) when progress is shown, else token rate.
+      // Grid lines are drawn from whichever axis is on the left to avoid clutter.
+      const leftAxisIsProgress = showProgress;
+      [100, 75, 50, 25, 0].forEach((pct) => {
+        const y = pad.top + h - (h * pct) / 100;
         ctx.fillStyle = labelAlpha;
-        ctx.fillText(v + '%', pad.left - 8, y + 4);
+        ctx.textAlign = 'right';
+        const leftLabel = leftAxisIsProgress
+          ? pct + '%'
+          : Math.round((safeTokenMax * pct) / 100).toString();
+        ctx.fillText(leftLabel, pad.left - 8, y + 4);
+        // Right axis labels only in dual-axis 'both' mode (token rate).
+        if (metric === 'both') {
+          ctx.textAlign = 'left';
+          ctx.fillText(
+            Math.round((safeTokenMax * pct) / 100).toString(),
+            cssWidth - pad.right + 8,
+            y + 4
+          );
+        }
         ctx.strokeStyle = gridColor;
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -623,11 +961,13 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
         ctx.lineTo(cssWidth - pad.right, y);
         ctx.stroke();
       });
+      ctx.textAlign = 'right';
 
-      // Reference line
+      // Reference line — interpreted against the LEFT axis (progress % when
+      // progress is shown, otherwise the token-rate scale).
       const rl = referenceLineRef.current;
       if (rl) {
-        const y = pad.top + h - (h * rl.value) / 100;
+        const y = leftAxisIsProgress ? progressToY(rl.value) : tokenToY(rl.value);
         const rlColor =
           rl.color || (darkBg ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)');
         ctx.strokeStyle = rlColor;
@@ -647,10 +987,26 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
       }
 
       // Agent lines
+      const drawNow = performance.now();
+      const winMs =
+        windowSecondsRef.current !== undefined
+          ? windowSecondsRef.current * 1000
+          : undefined;
+      // Reuse the shared target computed above (also passed to deriveScale's
+      // axis scan) so the scan and the draw hit the SAME downsample cache.
+      const targetPoints = drawTargetPoints;
+      // LTTB recompute interval: recompute often enough that the window's left
+      // edge is never more than ~0.5% of the visible span stale. For a 15m
+      // window that's ~4.5s (cheap, big perf win); for a 5s window it's 25ms
+      // (near-exact). Aggressive on long windows where perf matters, effectively
+      // off on short ones where staleness would be visible.
+      const recomputeMs =
+        winMs !== undefined ? Math.max(16, winMs * 0.005) : 250;
+
       agentsRef.current.forEach((agent) => {
         if (!agent.visible) return;
-        const progressBuf = progressBufferRef.current.get(agent.id) || [];
-        if (progressBuf.length < 2) return;
+        const primaryBuf = primaryBufferRef.current.get(agent.id);
+        if (!primaryBuf || primaryBuf.length < 2) return;
 
         if (!liveValuesRef.current.has(agent.id)) {
           liveValuesRef.current.set(agent.id, {
@@ -673,20 +1029,38 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
         // Status is discrete — copy, never lerp.
         live.status = agent.current.status;
 
+        const livePrimary = primaryIsTokens ? live.tokensRate : live.progress;
+
         // liveX/liveY are the current "tip" of the line in CSS pixels
         const liveX = cssWidth - pad.right;
-        const liveY = pad.top + h - (h * live.progress) / 100;
+        const liveY = primaryToY(livePrimary);
 
-        const splinePoints = progressBuf.map((val, i) => ({
-          x: pad.left + (i / Math.max(1, progressBuf.length - 1)) * w,
-          y: pad.top + h - (h * val) / 100,
-        }));
+        // Windowed + (if needed) downsampled points. x maps by TIME across the
+        // window so the horizontal axis is time-linear; when no window is set,
+        // the full retained span maps left→right.
+        const { points: rawPts } = primaryBuf.windowed(drawNow, winMs, targetPoints, recomputeMs);
+        if (rawPts.length < 2) return;
+        // Display-only smoothing (opt-in via `smoothing`). Operates on the draw
+        // points; buffer/health/tooltip remain raw.
+        const pts = emaPoints(rawPts, smoothingRef.current);
+        const tStart = winMs !== undefined ? drawNow - winMs : pts[0].t;
+        const tEnd = drawNow;
+        const tSpan = Math.max(1, tEnd - tStart);
+        const xOf = (t: number) =>
+          pad.left + Math.max(0, Math.min(1, (t - tStart) / tSpan)) * w;
+
+        const splinePoints = pts.map((p) => ({ x: xOf(p.t), y: primaryToY(p.v) }));
         splinePoints.push({ x: liveX, y: liveY });
 
-        // Subtle area fill beneath the line
-        const fillGrad = ctx.createLinearGradient(0, pad.top, 0, pad.top + h);
-        fillGrad.addColorStop(0, agent.color + '12');
-        fillGrad.addColorStop(1, 'rgba(255,255,255,0)');
+        // Subtle area fill beneath the line (cached per agent color)
+        const fillKey = 'fill:' + agent.color;
+        let fillGrad = fillCache.get(fillKey);
+        if (!fillGrad) {
+          fillGrad = ctx.createLinearGradient(0, pad.top, 0, pad.top + h);
+          fillGrad.addColorStop(0, agent.color + '12');
+          fillGrad.addColorStop(1, 'rgba(255,255,255,0)');
+          fillCache.set(fillKey, fillGrad);
+        }
         ctx.fillStyle = fillGrad;
         ctx.beginPath();
         ctx.moveTo(pad.left, pad.top + h);
@@ -696,15 +1070,21 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
         ctx.fill();
 
         // Main line: fades in from the left, full color at the right edge
-        const lineGrad = ctx.createLinearGradient(
-          pad.left,
-          0,
-          cssWidth - pad.right,
-          0
-        );
-        lineGrad.addColorStop(0, 'rgba(255,255,255,0)');
-        lineGrad.addColorStop(0.12, agent.color + '22');
-        lineGrad.addColorStop(1, agent.color);
+        // (cached per agent color)
+        const lineKey = 'line:' + agent.color;
+        let lineGrad = fillCache.get(lineKey);
+        if (!lineGrad) {
+          lineGrad = ctx.createLinearGradient(
+            pad.left,
+            0,
+            cssWidth - pad.right,
+            0
+          );
+          lineGrad.addColorStop(0, 'rgba(255,255,255,0)');
+          lineGrad.addColorStop(0.12, agent.color + '22');
+          lineGrad.addColorStop(1, agent.color);
+          fillCache.set(lineKey, lineGrad);
+        }
         ctx.strokeStyle = lineGrad;
         ctx.lineWidth = 1.5;
         ctx.lineCap = 'round';
@@ -720,6 +1100,26 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
         ctx.beginPath();
         ctx.arc(liveX, liveY, 1, 0, Math.PI * 2);
         ctx.fill();
+
+        // Dual-axis overlay: in 'both' mode, draw the token-rate series as a
+        // dashed line on the right-axis scale. Same color, lighter weight, so
+        // it reads as a companion to the solid progress line above.
+        if (metric === 'both') {
+          const tokBuf = tokensBufferRef.current.get(agent.id);
+          if (tokBuf && tokBuf.length >= 2) {
+            const { points: rawTpts } = tokBuf.windowed(drawNow, winMs, targetPoints, recomputeMs);
+            const tpts = emaPoints(rawTpts, smoothingRef.current);
+            if (tpts.length >= 2) {
+              const tokPoints = tpts.map((p) => ({ x: xOf(p.t), y: tokenToY(p.v) }));
+              tokPoints.push({ x: liveX, y: tokenToY(live.tokensRate) });
+              ctx.strokeStyle = agent.color + '99';
+              ctx.lineWidth = 1;
+              ctx.setLineDash([3, 3]);
+              drawCatmullRom(ctx, tokPoints, 0.4);
+              ctx.setLineDash([]);
+            }
+          }
+        }
       });
 
       // Professional paused-state indicator (drawn on-canvas so it survives
@@ -732,7 +1132,7 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
       }
 
       animationRef.current = requestAnimationFrame(animate);
-    }, []); // ← intentionally empty: reads exclusively from refs
+    }, [deriveScale]); // deriveScale is ref-stable (empty deps), so the RAF loop still never restarts
 
     useEffect(() => {
       resizeCanvas();
@@ -776,25 +1176,73 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
         let closest: { point: AgentDataPoint; agentId: string } | null = null;
         let minDist = Infinity;
 
+        // Use the SAME primary buffer + scale + windowing the draw loop uses, so
+        // the hover target sits exactly on the rendered line in every mode.
+        // MUST equal the draw loop's targetPoints (w/2) so hover reads the same
+        // cached downsample the line was drawn from — identical points → hovered
+        // point sits exactly on the rendered line, and the axis scan shares it.
+        const targetPoints = Math.max(8, Math.ceil(w / 2));
+        const { primaryIsTokens, primaryBufferRef, primaryToY } = deriveScale(h, pad.top, targetPoints);
+        const hoverNow = performance.now();
+        const winMs =
+          windowSecondsRef.current !== undefined
+            ? windowSecondsRef.current * 1000
+            : undefined;
+        // Match the draw loop's recompute interval so hover reads the SAME
+        // cached downsample the line was drawn from (shared cache → identical
+        // points → hover target sits exactly on the rendered line).
+        const recomputeMs =
+          winMs !== undefined ? Math.max(16, winMs * 0.005) : 250;
+
         agentsRef.current.forEach((agent) => {
           if (!agent.visible) return;
-          const progressBuf = progressBufferRef.current.get(agent.id) || [];
-          progressBuf.forEach((val, i) => {
-            // x, y computed in CSS pixels — same space as mouseX/mouseY
+          const primaryBuf = primaryBufferRef.current.get(agent.id);
+          if (!primaryBuf) return;
+          const { points: rawPts } = primaryBuf.windowed(hoverNow, winMs, targetPoints, recomputeMs);
+          if (rawPts.length < 2) return;
+          // Hit-test geometry must match the DRAWN line, so smooth identically.
+          // But the tooltip must report RAW values — so we keep both, aligned by
+          // index: smoothed for the y used in distance, raw for what we display.
+          const sm = smoothingRef.current;
+          const drawPts = emaPoints(rawPts, sm);
+          const tStart = winMs !== undefined ? hoverNow - winMs : drawPts[0].t;
+          const tSpan = Math.max(1, hoverNow - tStart);
+          const otherBuf = primaryIsTokens
+            ? progressBufferRef.current.get(agent.id)
+            : tokensBufferRef.current.get(agent.id);
+
+          drawPts.forEach((p, idx) => {
             const x =
-              pad.left + (i / Math.max(1, progressBuf.length - 1)) * w;
-            const y = pad.top + h - (h * val) / 100;
+              pad.left + Math.max(0, Math.min(1, (p.t - tStart) / tSpan)) * w;
+            const y = primaryToY(p.v); // smoothed: matches the rendered curve
             const dist = Math.hypot(x - mouseX, y - mouseY);
             if (dist < minDist && dist < 32) {
               minDist = dist;
+              // Report RAW values at this point, never the smoothed ones.
+              const rawV = rawPts[idx].v;
+              // Copy-free O(log n) lookup on the companion buffer (no toArray).
+              const companion = otherBuf
+                ? otherBuf.nearestValueAt(p.t)
+                : undefined;
+              const progressAtT = primaryIsTokens
+                ? companion ?? agent.current.progress
+                : rawV;
+              const tokensAtT = primaryIsTokens
+                ? rawV
+                : companion ?? agent.current.tokensRate;
               closest = {
                 point: {
-                  time: Date.now(),
-                  tokensRate:
-                    tokensBufferRef.current.get(agent.id)?.[i] ??
-                    agent.current.tokensRate,
-                  progress: val,
-                  status: agent.current.status,
+                  // Both `time` and `status` are now the REAL historical values
+                  // at the hovered sample: time from the time-indexed buffer,
+                  // status from the sparse status-transition log (statusAt).
+                  // Falls back to current status only if no transition predates
+                  // the point (shouldn't happen post-seed).
+                  time: p.t,
+                  tokensRate: tokensAtT,
+                  progress: progressAtT,
+                  status:
+                    statusLogRef.current.get(agent.id)?.statusAt(p.t) ??
+                    agent.current.status,
                 },
                 agentId: agent.id,
               };
@@ -803,7 +1251,7 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
         });
         setHoveredPoint(closest);
       },
-      [] // stable: reads from refs
+      [deriveScale] // deriveScale is ref-stable
     );
 
     const handleCanvasKeyDown = useCallback(
@@ -813,6 +1261,7 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
           setPaused((p) => {
             const next = !p;
             pausedRef.current = next;
+            dirtyRef.current = true; // repaint once to show/clear the PAUSED overlay
             return next;
           });
         } else if (e.key === 'Escape') {
@@ -826,6 +1275,7 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
       agentsRef.current = agentsRef.current.map((a) =>
         a.id === id ? { ...a, visible: !a.visible } : a
       );
+      dirtyRef.current = true;
       setUiAgents((prev) =>
         prev.map((a) => (a.id === id ? { ...a, visible: !a.visible } : a))
       );
@@ -847,7 +1297,8 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
         className={className}
         style={{ width: '100%', height, position: 'relative', ...rootStyle }}
       >
-        
+        {/* Scoped focus ring — :focus-visible only applies for keyboard focus,
+            so mouse clicks on the canvas don't trigger a visible outline. */}
         <style>{`.agentstat-canvas:focus-visible{outline:2px solid #3b82f6;outline-offset:2px;}`}</style>
         <canvas
           ref={canvasRef}
@@ -933,7 +1384,7 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
           {uiAgents
             .filter((a) => a.visible)
             .map((agent) => {
-              const rates = tokensBufferRef.current.get(agent.id) || [];
+              const rates = tokensBufferRef.current.get(agent.id)?.values() ?? [];
               // Read from the smoothed cache (updated every 500ms, >1pt threshold).
               // Avoids the random confidenceScore causing the displayed number to
               // shuffle every frame even when the line is visually flat.

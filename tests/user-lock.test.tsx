@@ -85,18 +85,21 @@ describe('user-lock: simulation respects consumer-set anomalous status (Item 4)'
     await advancePastAutoRecoveryWindow();
     expect(ref.current?.getLiveMetrics('a')?.status).toBe('stuck');
 
-    // User clears by re-asserting 'active'. After this, sim is free to
-    // drive status again (subject to RNG), so at minimum we know the
-    // next tick will not be 'stuck' unless randomness re-triggers it.
+    // User clears the lock by re-asserting a non-anomalous status. Both the
+    // lock release AND the status write happen synchronously inside
+    // updateAgent, so we assert IMMEDIATELY — before advancing any timers, so
+    // no sim tick can re-roll the status. This is the deterministic proof that
+    // the user's value took effect (i.e. the lock no longer pins 'stuck').
+    // Advancing time here was the original flaw: it let the RNG sim run.
     act(() => {
       ref.current?.updateAgent('a', 15, 20, 'active');
     });
-    // One sim tick is enough to observe the cleared lock.
+    // Advance ONE animation frame (16ms) so the RAF loop propagates the new
+    // status into liveValues, but less than the 55ms sim-tick interval so the
+    // sim cannot re-roll an anomaly in between. Deterministic: no RNG window.
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(16);
     });
-    // Immediately after the unlock, status should be 'active' — unlock is
-    // instantaneous; sim has had too few ticks to re-roll an anomaly.
     expect(ref.current?.getLiveMetrics('a')?.status).toBe('active');
   });
 

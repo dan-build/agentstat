@@ -7,4 +7,5 @@ export type {
   AgentStatProps,
   AgentStatRef,
   HealthMetrics,
+  ChartMetric,
 } from './AgentStat';

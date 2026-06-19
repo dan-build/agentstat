@@ -1,9 +1,17 @@
+// tests/setup.ts
+//
+// happy-dom returns null from HTMLCanvasElement.getContext('2d'), which means
+// AgentStat's animate() loop bails out before populating liveValuesRef.
+// This file stubs out a no-op 2D context so animate() runs to completion in
+// tests — no pixels get drawn (nobody's looking), but every side-effect in
+// the loop (refs, lerps, status copies) works correctly.
+
 import { beforeAll } from 'vitest';
 
 function makeContextMock(): CanvasRenderingContext2D {
   const gradient = { addColorStop: () => {} } as unknown as CanvasGradient;
   const mock = {
-    
+    // Writable style props animate() sets
     fillStyle: '',
     strokeStyle: '',
     lineWidth: 1,
@@ -15,7 +23,7 @@ function makeContextMock(): CanvasRenderingContext2D {
     shadowBlur: 0,
     shadowColor: '',
     globalAlpha: 1,
-  
+    // Methods animate() / resizeCanvas() call
     fillRect: () => {},
     strokeRect: () => {},
     clearRect: () => {},
