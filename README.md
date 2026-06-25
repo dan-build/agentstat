@@ -34,7 +34,7 @@ long-running production monitoring on a single canvas.
 
 ```bash
 npm install @dan-build/agentstat
-# package name is finalized at publish time; examples below use `agentstat`
+
 ```
 
 A live-animating chart in four lines, with the built-in simulation and a ready-made roster of demo agents:
