@@ -12,6 +12,12 @@ import React, {
 
 import { TimeSeriesBuffer } from './timeseries';
 import { StatusLog } from './statuslog';
+import {
+  detectAnomalies,
+  DEFAULT_ANOMALY_CONFIG,
+  type Anomaly,
+  type AnomalyConfig,
+} from './anomaly';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES
@@ -129,11 +135,31 @@ export interface AgentStatProps {
    * faithfully seeing every spike matters more than a calm line.
    */
   smoothing?: number;
+  /**
+   * Enable automatic anomaly detection (default false). When on, AgentStat
+   * watches each agent's token-rate and status streams and flags stalls (idle
+   * while active), runaway spikes (statistical outliers vs the agent's own
+   * baseline), and status thrashing — drawing markers on the chart and firing
+   * `onAnomaly`. This is the agent-aware analysis a generic chart can't do.
+   */
+  anomalyDetection?: boolean;
+  /**
+   * Override anomaly thresholds. Merged over sensible defaults
+   * (DEFAULT_ANOMALY_CONFIG). Only the fields you set are changed.
+   */
+  anomalyConfig?: Partial<AnomalyConfig>;
+  /**
+   * Called when an anomaly is detected for an agent. Fires once per distinct
+   * anomaly occurrence (not every frame). Use it to log, alert, or page.
+   */
+  onAnomaly?: (agentId: string, anomaly: Anomaly) => void;
 }
 
 export interface AgentStatRef {
   updateAgent: (id: string, tokensRate: number, progress: number, status: AgentStatus) => void;
   getHealth: (id: string) => HealthMetrics | undefined;
+  /** Anomalies currently active for an agent (empty if none or detection off). */
+  getAnomalies: (id: string) => Anomaly[];
   getLiveMetrics: (
     id: string
   ) => { tokensRate: number; progress: number; status: AgentStatus } | undefined;
@@ -145,6 +171,16 @@ export interface AgentStatRef {
 
 const lerp = (start: number, end: number, t: number): number =>
   start + (end - start) * t;
+
+// Default visible time span (ms) when no `windowSeconds` is set. Kept short (10s)
+// deliberately: at typical update rates the visible sample count then falls
+// BELOW the downsample threshold, so LTTB is skipped entirely and the exact same
+// points render every frame — rock-stable, no point-position switching, and
+// cheaper. A longer default re-introduces downsampling, whose periodic recompute
+// reselects representative points and makes the line appear to shift. Consumers
+// who want a longer history set `windowSeconds` explicitly and accept the
+// (cached, downsampled) longer view.
+const DEFAULT_VIEW_MS = 10_000;
 
 /**
  * Display-only exponential moving average over a point series' values. Returns
@@ -192,15 +228,31 @@ export const niceMax = (raw: number, floor = 10): number => {
  * Exported for unit testing — not re-exported from the package entry
  * (src/index.ts), so consumers don't see this as public API.
  */
-export const calculateHealth = (agent: Agent, recentRates: number[]): HealthMetrics => {
+export const calculateHealth = (
+  agent: Agent,
+  recentRates: number[],
+  anomalies?: Anomaly[]
+): HealthMetrics => {
   const { current, config } = agent;
 
   const [minTok = 5, maxTok = 25] = config?.expectedTokensPerSec ?? [];
   const idealTok = (minTok + maxTok) / 2;
+  // Efficiency is computed from a REPRESENTATIVE recent rate, not the single
+  // instantaneous sample. Reading current.tokensRate made the number oscillate
+  // every tick as the live rate wandered within its band — it looked random and
+  // didn't track the drawn line. Averaging the recent window gives a stable value
+  // that reflects what the chart actually shows. (Test-safe: the efficiency tests
+  // pass recentRates equal to tokensRate, so the average equals current and every
+  // asserted value is unchanged. Falls back to current when no window is given.)
+  const effWindow = recentRates.slice(-30);
+  const repRate =
+    effWindow.length > 0
+      ? effWindow.reduce((s, r) => s + r, 0) / effWindow.length
+      : current.tokensRate;
   const tokenEfficiency =
-    current.tokensRate >= minTok && current.tokensRate <= maxTok
+    repRate >= minTok && repRate <= maxTok
       ? 100
-      : Math.max(0, 100 - Math.abs(current.tokensRate - idealTok) * 4);
+      : Math.max(0, 100 - Math.abs(repRate - idealTok) * 4);
 
   const recent = recentRates.slice(-30);
   const tokenVariance =
@@ -245,13 +297,57 @@ export const calculateHealth = (agent: Agent, recentRates: number[]): HealthMetr
             0.1
   );
 
+  // Real, data-derived penalty from detected anomalies (stall/spike/thrash).
+  // Unlike the legacy confidenceScore path, these come from actual behavior the
+  // detector observed. Additive and backward compatible: with no anomalies
+  // argument (or an empty list) the score is exactly the legacy value.
+  let anomalyPenalty = 0;
+  if (anomalies && anomalies.length) {
+    for (const a of anomalies) {
+      // Critical issues hurt more than warnings; stalls/thrash indicate the
+      // agent is stuck or unstable, which is worse than a transient spike.
+      const base = a.severity === 'critical' ? 30 : 15;
+      const kindWeight = a.kind === 'stall' ? 1.0 : a.kind === 'thrash' ? 0.9 : 0.7;
+      anomalyPenalty += base * kindWeight;
+    }
+  }
+
   return {
-    score: Math.max(0, Math.min(100, score)),
+    score: Math.max(0, Math.min(100, score - anomalyPenalty)),
     tokenEfficiency: Math.round(tokenEfficiency),
     stability: Math.round(stability),
     hallucinationRisk,
     latencyTrend,
   };
+};
+
+// Build (but don't stroke) a Catmull-Rom spline path through `points` into the
+// current path. Shared by the stroked line AND the area fill so both follow the
+// identical curve — otherwise the fill's top edge is a jagged polyline under a
+// smooth line. Caller handles beginPath/moveTo framing and stroke/fill.
+const splinePath = (
+  ctx: CanvasRenderingContext2D,
+  points: { x: number; y: number }[],
+  tension = 0.4
+) => {
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[Math.max(0, i - 1)];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[Math.min(points.length - 1, i + 2)];
+    const c1x = p1.x + ((p2.x - p0.x) * tension) / 3;
+    let c1y = p1.y + ((p2.y - p0.y) * tension) / 3;
+    const c2x = p2.x - ((p3.x - p1.x) * tension) / 3;
+    let c2y = p2.y - ((p3.y - p1.y) * tension) / 3;
+    // Clamp control points vertically to the segment span (+slack) so a steep
+    // change can't overshoot/loop — the classic untidy-spline artifact.
+    const loY = Math.min(p1.y, p2.y);
+    const hiY = Math.max(p1.y, p2.y);
+    const slack = (hiY - loY) * 0.5 + 0.01;
+    c1y = Math.max(loY - slack, Math.min(hiY + slack, c1y));
+    c2y = Math.max(loY - slack, Math.min(hiY + slack, c2y));
+    ctx.bezierCurveTo(c1x, c1y, c2x, c2y, p2.x, p2.y);
+  }
 };
 
 const drawCatmullRom = (
@@ -260,22 +356,10 @@ const drawCatmullRom = (
   tension = 0.4
 ) => {
   if (points.length < 2) return;
+  ctx.lineJoin = 'round';
   ctx.beginPath();
   ctx.moveTo(points[0].x, points[0].y);
-  for (let i = 0; i < points.length - 1; i++) {
-    const p0 = points[Math.max(0, i - 1)];
-    const p1 = points[i];
-    const p2 = points[i + 1];
-    const p3 = points[Math.min(points.length - 1, i + 2)];
-    ctx.bezierCurveTo(
-      p1.x + ((p2.x - p0.x) * tension) / 3,
-      p1.y + ((p2.y - p0.y) * tension) / 3,
-      p2.x - ((p3.x - p1.x) * tension) / 3,
-      p2.y - ((p3.y - p1.y) * tension) / 3,
-      p2.x,
-      p2.y
-    );
-  }
+  splinePath(ctx, points, tension);
   ctx.stroke();
 };
 
@@ -382,6 +466,9 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
       tokenAxisMax,
       windowSeconds,
       smoothing = 0,
+      anomalyDetection = false,
+      anomalyConfig,
+      onAnomaly,
     },
     ref
   ) => {
@@ -446,6 +533,18 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
       bucket: -1,
       value: 0,
     });
+    // Anomaly detection state. Detection runs on a throttled interval (not every
+    // frame); the draw loop only renders these cached results. `firedRef` tracks
+    // which (agent, kind, anchorTime) anomalies already fired onAnomaly, so the
+    // callback fires once per occurrence rather than repeatedly while it persists.
+    const anomalyDetectionRef = useRef(anomalyDetection);
+    const anomalyConfigRef = useRef<AnomalyConfig>({
+      ...DEFAULT_ANOMALY_CONFIG,
+      ...anomalyConfig,
+    });
+    const onAnomalyRef = useRef(onAnomaly);
+    const anomaliesRef = useRef<Map<string, Anomaly[]>>(new Map());
+    const anomalyFiredRef = useRef<Set<string>>(new Set());
     useEffect(() => { stylesRef.current = styles; }, [styles]);
     useEffect(() => { referenceLineRef.current = referenceLine; }, [referenceLine]);
     useEffect(() => { maxHistoryPointsRef.current = maxHistoryPoints; }, [maxHistoryPoints]);
@@ -453,6 +552,9 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
     useEffect(() => { tokenAxisMaxRef.current = tokenAxisMax; dirtyRef.current = true; }, [tokenAxisMax]);
     useEffect(() => { windowSecondsRef.current = windowSeconds; dirtyRef.current = true; }, [windowSeconds]);
     useEffect(() => { smoothingRef.current = smoothing; dirtyRef.current = true; }, [smoothing]);
+    useEffect(() => { anomalyDetectionRef.current = anomalyDetection; dirtyRef.current = true; }, [anomalyDetection]);
+    useEffect(() => { anomalyConfigRef.current = { ...DEFAULT_ANOMALY_CONFIG, ...anomalyConfig }; }, [anomalyConfig]);
+    useEffect(() => { onAnomalyRef.current = onAnomaly; }, [onAnomaly]);
 
     // Callback refs — stable references to the latest callbacks.
     const onHealthChangeRef = useRef(onHealthChange);
@@ -601,15 +703,16 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
             tokensBuf.push(now, safeTokens);
             statusLogRef.current.get(id)?.record(now, status);
             dirtyRef.current = true;
-            // Count cap is enforced inside the buffer (hardCap); when a time
-            // window is active we also evict by time so memory tracks the window.
+            // Evict by time so memory and the per-frame window-slice scan stay
+            // bounded. Retain 1.5× the ACTIVE view — the explicit window when set,
+            // otherwise the default no-window view. Previously no-window mode never
+            // evicted, so the buffer grew to its 20k cap and the slice walked
+            // thousands of stale points every frame.
             const winS = windowSecondsRef.current;
-            if (winS !== undefined) {
-              const retain = winS * 1000 * 1.5; // keep 1.5× the visible window
-              progressBuf.evictOlderThan(now, retain);
-              tokensBuf.evictOlderThan(now, retain);
-              statusLogRef.current.get(id)?.evictOlderThan(now - retain);
-            }
+            const retain = (winS !== undefined ? winS * 1000 : DEFAULT_VIEW_MS) * 1.5;
+            progressBuf.evictOlderThan(now, retain);
+            tokensBuf.evictOlderThan(now, retain);
+            statusLogRef.current.get(id)?.evictOlderThan(now - retain);
             return {
               ...agent,
               current: { ...agent.current, tokensRate: safeTokens, progress: safeProgress, status },
@@ -617,6 +720,7 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
           });
         },
         getHealth: (id) => healthCacheRef.current[id],
+        getAnomalies: (id) => anomaliesRef.current.get(id) ?? [],
         getLiveMetrics: (id) => liveValuesRef.current.get(id),
       }),
       []
@@ -677,7 +781,14 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
             // Recovery: ramp back up toward expected range
             newTokens = Math.min(targetTok, agent.current.tokensRate + Math.random() * 2);
           } else {
-            newTokens = Math.max(1, Math.min(35, agent.current.tokensRate + (Math.random() * 1.8 - 0.9)));
+            // Healthy generation: a mean-reverting walk toward the middle of the
+            // agent's expected band, with mild noise. Real token rates hover in a
+            // characteristic range and drift back toward it rather than wandering
+            // freely — this reverts ~12% toward target each tick plus small jitter,
+            // so the line looks like a settled agent, not directionless noise.
+            const reversion = (targetTok - agent.current.tokensRate) * 0.12;
+            const jitter = Math.random() * 1.6 - 0.8;
+            newTokens = Math.max(minTok * 0.6, Math.min(maxTok * 1.15, agent.current.tokensRate + reversion + jitter));
           }
 
           // ── progress reflects status ──────────────────────────────────
@@ -689,7 +800,13 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
 
           // ── confidenceScore: stable when healthy, low during anomaly ──
           // Stable 0.95 prevents score jitter during normal operation.
-          const nextConfidence = inAnomaly ? Math.random() * 0.35 : 0.95;
+          // Confidence eases toward a target (low during an anomaly, high when
+          // healthy) rather than teleporting to a fresh random value each tick.
+          // The old per-tick randomness made the health score visibly flicker —
+          // a real agent's confidence doesn't jump around frame to frame.
+          const confTarget = inAnomaly ? 0.3 : 0.95;
+          const prevConf = agent.current.confidenceScore ?? 0.9;
+          const nextConfidence = prevConf + (confTarget - prevConf) * 0.25;
 
           const progressBuf = progressBufferRef.current.get(agent.id);
           const tokensBuf = tokensBufferRef.current.get(agent.id);
@@ -700,12 +817,10 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
             statusLogRef.current.get(agent.id)?.record(now, nextStatus);
             dirtyRef.current = true;
             const winS = windowSecondsRef.current;
-            if (winS !== undefined) {
-              const retain = winS * 1000 * 1.5;
-              progressBuf.evictOlderThan(now, retain);
-              tokensBuf.evictOlderThan(now, retain);
-              statusLogRef.current.get(agent.id)?.evictOlderThan(now - retain);
-            }
+            const retain = (winS !== undefined ? winS * 1000 : DEFAULT_VIEW_MS) * 1.5;
+            progressBuf.evictOlderThan(now, retain);
+            tokensBuf.evictOlderThan(now, retain);
+            statusLogRef.current.get(agent.id)?.evictOlderThan(now - retain);
           }
 
           return {
@@ -729,16 +844,76 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
       const interval = setInterval(() => {
         const current = agentsRef.current;
         setUiAgents([...current]);
+        const detectOn = anomalyDetectionRef.current;
+        const acfg = anomalyConfigRef.current;
+        const nowT = performance.now();
         current.forEach((agent) => {
           if (!agent.visible) return;
+
+          // ── Anomaly detection first, so health can reflect fresh results ──
+          if (detectOn) {
+            const tokBuf = tokensBufferRef.current.get(agent.id);
+            const tokens = tokBuf ? tokBuf.toArray().map((p) => ({ t: p.t, v: p.v })) : [];
+            const changes =
+              statusLogRef.current
+                .get(agent.id)
+                ?.transitionsInRange(nowT - acfg.thrashWindowMs, nowT) ?? [];
+            const found = detectAnomalies(
+              tokens,
+              changes,
+              agent.current.status,
+              nowT,
+              acfg
+            );
+            const prev = anomaliesRef.current.get(agent.id) ?? [];
+            anomaliesRef.current.set(agent.id, found);
+            if (found.length !== prev.length || found.length > 0) dirtyRef.current = true;
+            for (const a of found) {
+              const key = `${agent.id}:${a.kind}:${Math.round(a.t)}`;
+              if (!anomalyFiredRef.current.has(key)) {
+                anomalyFiredRef.current.add(key);
+                onAnomalyRef.current?.(agent.id, a);
+              }
+            }
+          } else if (anomaliesRef.current.has(agent.id)) {
+            anomaliesRef.current.delete(agent.id);
+            dirtyRef.current = true;
+          }
+
           const rates = tokensBufferRef.current.get(agent.id)?.values() ?? [];
-          const health = calculateHealth(agent, rates);
+          const health = calculateHealth(
+            agent,
+            rates,
+            detectOn ? anomaliesRef.current.get(agent.id) : undefined
+          );
           const cached = healthCacheRef.current[agent.id];
-          if (!cached || Math.abs(cached.score - health.score) > 1) {
-            healthCacheRef.current[agent.id] = health;
-            onHealthChangeRef.current?.(agent.id, health);
+          // Smooth the displayed score with an EMA so the headline number
+          // settles into a representative value instead of flickering on every
+          // tick. The component metrics (efficiency/stability/etc.) are shown
+          // raw; only the composite score is smoothed, and it still moves
+          // promptly on real change (alpha 0.4 ≈ responds within ~2-3 ticks).
+          // A large drop (e.g. an anomaly penalty kicking in) bypasses smoothing
+          // so genuine problems surface immediately rather than easing in.
+          const prevScore = cached?.score;
+          let displayScore = health.score;
+          if (prevScore !== undefined) {
+            const bigDrop = health.score < prevScore - 15;
+            displayScore = bigDrop
+              ? health.score // surface real degradation instantly
+              : Math.round(prevScore * 0.6 + health.score * 0.4);
+          }
+          const smoothed = { ...health, score: displayScore };
+          if (!cached || Math.abs(cached.score - smoothed.score) >= 1) {
+            healthCacheRef.current[agent.id] = smoothed;
+            onHealthChangeRef.current?.(agent.id, smoothed);
           }
         });
+        // Bound the fired-set so it can't grow without limit over long sessions.
+        if (anomalyFiredRef.current.size > 1000) {
+          anomalyFiredRef.current = new Set(
+            Array.from(anomalyFiredRef.current).slice(-500)
+          );
+        }
       }, 500);
       return () => clearInterval(interval);
     }, []);
@@ -772,6 +947,7 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
           windowSecondsRef.current !== undefined
             ? windowSecondsRef.current * 1000
             : undefined;
+        const effectiveWinMs = winMs ?? DEFAULT_VIEW_MS;
         // Recompute the axis max at most ~4×/sec (250ms buckets), not every
         // frame. Between recomputes we reuse the cached ceiling — the max of a
         // live stream doesn't change meaningfully frame-to-frame, and a stable
@@ -785,28 +961,37 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
           // (Using a different target here caused per-frame cache thrash — two
           // full LTTB passes per buffer per frame — which was the dominant
           // tokens/both-mode cost. Measured ~178× worse than sharing the cache.)
-          const recMs =
-            winMs !== undefined ? Math.max(16, winMs * 0.005) : 250;
+          const recMs = Math.max(16, effectiveWinMs * 0.005);
           agentsRef.current.forEach((agent) => {
             if (!agent.visible) return;
             const buf = tokensBufferRef.current.get(agent.id);
             if (!buf) return;
-            const pts = buf.windowed(now, winMs, scanTarget, recMs).points;
+            const pts = buf.windowed(now, effectiveWinMs, scanTarget, recMs).points;
             for (let i = 0; i < pts.length; i++) {
               if (pts[i].v > observed) observed = pts[i].v;
             }
             if (agent.current.tokensRate > observed) observed = agent.current.tokensRate;
           });
-          const fresh = niceMax(observed * 1.1);
-          // Hysteresis: only adopt a new ceiling if it differs enough, so small
-          // wobbles in the max don't nudge the axis (and force a redraw scale).
-          if (
-            cache.value === 0 ||
-            fresh > cache.value ||
-            fresh < cache.value * 0.7
-          ) {
-            cache.value = fresh;
+          const target = niceMax(observed * 1.15);
+          // Sticky axis ceiling. A token axis that snaps to every change in the
+          // observed max makes the whole line jump vertically on each rescale —
+          // historical points appear to "move" even though their values are
+          // fixed. That's the opposite of what a readable chart needs. So:
+          //   - Rise immediately to a new high (a spike must never clip).
+          //   - Otherwise HOLD. Only when the true ceiling has been well below
+          //     the current one for a sustained period do we ease downward, and
+          //     we ease (not snap) so the line glides rather than jumps.
+          // Result: the axis is stable through normal fluctuation and the line
+          // behaves like progress mode — points keep their position.
+          if (cache.value === 0 || target > cache.value) {
+            cache.value = target; // immediate rise — never clip a spike
+          } else if (target < cache.value * 0.6) {
+            // True max has dropped a lot and stayed there: ease down ~8% per
+            // recompute (~4×/sec → a few seconds to settle) instead of snapping.
+            cache.value = Math.max(target, cache.value * 0.92);
           }
+          // Between 60% and 100% of the current ceiling we deliberately do
+          // nothing — this dead-band is what keeps the axis (and the line) still.
           cache.bucket = bucket;
         }
         tokenMax = cache.value;
@@ -992,6 +1177,11 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
         windowSecondsRef.current !== undefined
           ? windowSecondsRef.current * 1000
           : undefined;
+      // Effective slice window. Even with no explicit windowSeconds we slice to
+      // DEFAULT_VIEW_MS so LTTB operates on a bounded set (~constant cost) rather
+      // than the whole accumulating buffer — this is what keeps the draw fast and
+      // smooth indefinitely instead of degrading as the session lengthens.
+      const effectiveWinMs = winMs ?? DEFAULT_VIEW_MS;
       // Reuse the shared target computed above (also passed to deriveScale's
       // axis scan) so the scan and the draw hit the SAME downsample cache.
       const targetPoints = drawTargetPoints;
@@ -1000,8 +1190,7 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
       // window that's ~4.5s (cheap, big perf win); for a 5s window it's 25ms
       // (near-exact). Aggressive on long windows where perf matters, effectively
       // off on short ones where staleness would be visible.
-      const recomputeMs =
-        winMs !== undefined ? Math.max(16, winMs * 0.005) : 250;
+      const recomputeMs = Math.max(16, effectiveWinMs * 0.005);
 
       agentsRef.current.forEach((agent) => {
         if (!agent.visible) return;
@@ -1038,34 +1227,79 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
         // Windowed + (if needed) downsampled points. x maps by TIME across the
         // window so the horizontal axis is time-linear; when no window is set,
         // the full retained span maps left→right.
-        const { points: rawPts } = primaryBuf.windowed(drawNow, winMs, targetPoints, recomputeMs);
+        const { points: rawPts } = primaryBuf.windowed(drawNow, effectiveWinMs, targetPoints, recomputeMs);
         if (rawPts.length < 2) return;
         // Display-only smoothing (opt-in via `smoothing`). Operates on the draw
         // points; buffer/health/tooltip remain raw.
         const pts = emaPoints(rawPts, smoothingRef.current);
-        const tStart = winMs !== undefined ? drawNow - winMs : pts[0].t;
-        const tEnd = drawNow;
+        // ── Stable x-domain ────────────────────────────────────────────────
+        // The x-axis must be anchored to DATA time, not wall-clock, or every
+        // frame re-projects the same points onto a shifting domain and the line
+        // appears to warp/crawl (history must hold its x-position and only
+        // scroll left as new data arrives).
+        //   - tEnd is the newest SAMPLE time (not drawNow), so the right edge
+        //     tracks real data; the live tip is extrapolated to the edge below.
+        //   - tStart is tEnd minus a fixed span: the window length when one is
+        //     set, otherwise the buffer's own time extent (rawPts span). Because
+        //     the span is a fixed duration, points keep a stable x as the pair
+        //     (tStart,tEnd) advances together — a clean leftward scroll.
+        const newestT = pts[pts.length - 1].t;
+        // No-window span: bounded to DEFAULT_VIEW_MS so the view scrolls at a
+        // CONSTANT density instead of growing to the buffer's full extent (which
+        // crammed more time into the same pixels every second, slowing the draw
+        // and shifting point positions). We take the smaller of the buffer's
+        // actual extent (so a young buffer fills left-to-right rather than
+        // starting zoomed-in) and the default cap. rawPts[0] is the true oldest
+        // retained sample; it moves only on real eviction, keeping x stable.
+        const oldestT = rawPts[0].t;
+        const bufferExtent = Math.max(1, newestT - oldestT);
+        const noWindowSpan = Math.min(bufferExtent, DEFAULT_VIEW_MS);
+        const tEnd = winMs !== undefined ? drawNow : newestT;
+        const tStart = winMs !== undefined ? drawNow - winMs : tEnd - noWindowSpan;
         const tSpan = Math.max(1, tEnd - tStart);
         const xOf = (t: number) =>
           pad.left + Math.max(0, Math.min(1, (t - tStart) / tSpan)) * w;
 
+        // Map every buffered sample to its true time-x. The newest sample sits
+        // slightly left of the right edge (it was taken a few ms ago), and the
+        // lerped live value is the SINGLE leading tip at the edge. Previously the
+        // newest sample was also pinned to the edge with its raw y, so the line
+        // drew to that raw point and then a tiny vertical segment jumped to the
+        // lerped dot — the dot appeared to lead while the line trailed and caught
+        // up. Letting the sample keep its real x (and not duplicating the tip)
+        // makes the curve flow smoothly into the dot.
         const splinePoints = pts.map((p) => ({ x: xOf(p.t), y: primaryToY(p.v) }));
-        splinePoints.push({ x: liveX, y: liveY });
+        // The tip is "now": its x is the right edge, its y is the lerped live
+        // value. If the newest sample already maps to (essentially) the edge,
+        // replace it so we don't stack two points at the same x; otherwise append
+        // the tip so the line extends from the last sample out to the live edge.
+        const tip = { x: liveX, y: liveY };
+        const last = splinePoints[splinePoints.length - 1];
+        if (last && liveX - last.x < 1.5) {
+          splinePoints[splinePoints.length - 1] = tip;
+        } else {
+          splinePoints.push(tip);
+        }
 
         // Subtle area fill beneath the line (cached per agent color)
         const fillKey = 'fill:' + agent.color;
         let fillGrad = fillCache.get(fillKey);
         if (!fillGrad) {
           fillGrad = ctx.createLinearGradient(0, pad.top, 0, pad.top + h);
-          fillGrad.addColorStop(0, agent.color + '12');
-          fillGrad.addColorStop(1, 'rgba(255,255,255,0)');
+          // Fade the area fill from a tint of the agent color to fully
+          // transparent. The transparent stop must match the background's
+          // color channel (white on light, black on dark) so the fill fades
+          // into the canvas instead of leaving a faint white veil on dark bg.
+          fillGrad.addColorStop(0, agent.color + (darkBg ? '20' : '12'));
+          fillGrad.addColorStop(1, darkBg ? 'rgba(0,0,0,0)' : 'rgba(255,255,255,0)');
           fillCache.set(fillKey, fillGrad);
         }
         ctx.fillStyle = fillGrad;
         ctx.beginPath();
-        ctx.moveTo(pad.left, pad.top + h);
-        splinePoints.forEach((p) => ctx.lineTo(p.x, p.y));
+        ctx.moveTo(splinePoints[0].x, splinePoints[0].y);
+        splinePath(ctx, splinePoints, 0.4); // same curve as the stroked line
         ctx.lineTo(liveX, pad.top + h);
+        ctx.lineTo(splinePoints[0].x, pad.top + h);
         ctx.closePath();
         ctx.fill();
 
@@ -1080,23 +1314,36 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
             cssWidth - pad.right,
             0
           );
-          lineGrad.addColorStop(0, 'rgba(255,255,255,0)');
-          lineGrad.addColorStop(0.12, agent.color + '22');
+          lineGrad.addColorStop(0, agent.color + '00');
+          lineGrad.addColorStop(0.10, agent.color + '14');
+          lineGrad.addColorStop(0.22, agent.color + '99');
           lineGrad.addColorStop(1, agent.color);
           fillCache.set(lineKey, lineGrad);
         }
+        ctx.save();
         ctx.strokeStyle = lineGrad;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = 1.75;
         ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
         drawCatmullRom(ctx, splinePoints, 0.4);
+        ctx.restore();
 
-        // Live dot — solid color with a small white/bg center
-        ctx.shadowBlur = 0;
+        // Live dot — a soft outer glow (color halo) plus a solid core with a
+        // small background-colored center, so the "live tip" reads clearly on
+        // either theme and differentiates agents at a glance (the glow is
+        // functional: it's how overlapping agent tips stay distinguishable).
+        const glowPulse = 0.5 + 0.5 * Math.sin(drawNow / 420);
+        ctx.save();
+        ctx.shadowColor = agent.color;
+        ctx.shadowBlur = 8 + glowPulse * 6;
         ctx.fillStyle = agent.color;
         ctx.beginPath();
         ctx.arc(liveX, liveY, 2.5, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = s.background || '#ffffff';
+        ctx.restore();
+        // Center pip in the background color (no shadow), for a crisp eye.
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = s.background || (darkBg ? '#0a0b0d' : '#ffffff');
         ctx.beginPath();
         ctx.arc(liveX, liveY, 1, 0, Math.PI * 2);
         ctx.fill();
@@ -1107,17 +1354,62 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
         if (metric === 'both') {
           const tokBuf = tokensBufferRef.current.get(agent.id);
           if (tokBuf && tokBuf.length >= 2) {
-            const { points: rawTpts } = tokBuf.windowed(drawNow, winMs, targetPoints, recomputeMs);
+            const { points: rawTpts } = tokBuf.windowed(drawNow, effectiveWinMs, targetPoints, recomputeMs);
             const tpts = emaPoints(rawTpts, smoothingRef.current);
             if (tpts.length >= 2) {
               const tokPoints = tpts.map((p) => ({ x: xOf(p.t), y: tokenToY(p.v) }));
-              tokPoints.push({ x: liveX, y: tokenToY(live.tokensRate) });
+              const tTip = { x: liveX, y: tokenToY(live.tokensRate) };
+              const tLast = tokPoints[tokPoints.length - 1];
+              if (tLast && liveX - tLast.x < 1.5) tokPoints[tokPoints.length - 1] = tTip;
+              else tokPoints.push(tTip);
               ctx.strokeStyle = agent.color + '99';
               ctx.lineWidth = 1;
               ctx.setLineDash([3, 3]);
               drawCatmullRom(ctx, tokPoints, 0.4);
               ctx.setLineDash([]);
             }
+          }
+        }
+
+        // ── Anomaly markers ────────────────────────────────────────────────
+        // Render the throttled detector's cached results for this agent. Drawn
+        // last so markers sit above the line. Anchored with the SAME xOf() time
+        // mapping as the curve, so a marker sits exactly under its moment.
+        if (anomalyDetectionRef.current) {
+          const anomalies = anomaliesRef.current.get(agent.id);
+          if (anomalies && anomalies.length) {
+            anomalies.forEach((an, ai) => {
+              const ax = xOf(an.t);
+              // Clamp into the plot area (a stall anchor can predate the window).
+              const mx = Math.max(pad.left, Math.min(cssWidth - pad.right, ax));
+              const isCritical = an.severity === 'critical';
+              const col = isCritical ? '#DC2626' : '#D97706'; // red-600 / amber-600
+              // Vertical guide line.
+              ctx.strokeStyle = col + (isCritical ? '66' : '44');
+              ctx.lineWidth = 1;
+              ctx.setLineDash([2, 3]);
+              ctx.beginPath();
+              ctx.moveTo(mx, pad.top);
+              ctx.lineTo(mx, pad.top + h);
+              ctx.stroke();
+              ctx.setLineDash([]);
+              // Marker dot at the top, stacked if multiple so they don't overlap.
+              const my = pad.top + 6 + ai * 14;
+              ctx.fillStyle = col;
+              ctx.beginPath();
+              ctx.arc(mx, my, 3.5, 0, Math.PI * 2);
+              ctx.fill();
+              // Label to the side, kept on-canvas.
+              ctx.font = '9px monospace';
+              ctx.textBaseline = 'middle';
+              const label = an.message;
+              const tw = ctx.measureText(label).width;
+              const labelX = mx + 7 + tw > cssWidth - pad.right ? mx - 7 - tw : mx + 7;
+              ctx.textAlign = 'left';
+              ctx.fillStyle = col;
+              ctx.fillText(label, labelX, my);
+              ctx.textBaseline = 'alphabetic';
+            });
           }
         }
       });
@@ -1188,25 +1480,33 @@ const AgentStat = forwardRef<AgentStatRef, AgentStatProps>(
           windowSecondsRef.current !== undefined
             ? windowSecondsRef.current * 1000
             : undefined;
+        const effectiveWinMs = winMs ?? DEFAULT_VIEW_MS;
         // Match the draw loop's recompute interval so hover reads the SAME
         // cached downsample the line was drawn from (shared cache → identical
         // points → hover target sits exactly on the rendered line).
-        const recomputeMs =
-          winMs !== undefined ? Math.max(16, winMs * 0.005) : 250;
+        const recomputeMs = Math.max(16, effectiveWinMs * 0.005);
 
         agentsRef.current.forEach((agent) => {
           if (!agent.visible) return;
           const primaryBuf = primaryBufferRef.current.get(agent.id);
           if (!primaryBuf) return;
-          const { points: rawPts } = primaryBuf.windowed(hoverNow, winMs, targetPoints, recomputeMs);
+          const { points: rawPts } = primaryBuf.windowed(hoverNow, effectiveWinMs, targetPoints, recomputeMs);
           if (rawPts.length < 2) return;
           // Hit-test geometry must match the DRAWN line, so smooth identically.
           // But the tooltip must report RAW values — so we keep both, aligned by
           // index: smoothed for the y used in distance, raw for what we display.
           const sm = smoothingRef.current;
           const drawPts = emaPoints(rawPts, sm);
-          const tStart = winMs !== undefined ? hoverNow - winMs : drawPts[0].t;
-          const tSpan = Math.max(1, hoverNow - tStart);
+          // Use the SAME stable data-anchored x-domain as the draw loop (anchored
+          // to the newest sample, fixed span) so the hover target sits exactly on
+          // the rendered line instead of a wall-clock-shifted projection.
+          const newestT = drawPts[drawPts.length - 1].t;
+          const oldestT = rawPts[0].t;
+          const bufferExtent = Math.max(1, newestT - oldestT);
+          const noWindowSpan = Math.min(bufferExtent, DEFAULT_VIEW_MS);
+          const tEnd = winMs !== undefined ? hoverNow : newestT;
+          const tStart = winMs !== undefined ? hoverNow - winMs : tEnd - noWindowSpan;
+          const tSpan = Math.max(1, tEnd - tStart);
           const otherBuf = primaryIsTokens
             ? progressBufferRef.current.get(agent.id)
             : tokensBufferRef.current.get(agent.id);

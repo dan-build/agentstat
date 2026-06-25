@@ -187,3 +187,51 @@ describe('calculateHealth — output shape', () => {
     expect(h).toHaveProperty('latencyTrend');
   });
 });
+
+describe('calculateHealth — anomaly penalty (real data-derived signals)', () => {
+  const steady = [15, 15, 15, 15, 15];
+
+  it('is unchanged when no anomalies are passed (backward compatible)', () => {
+    const without = calculateHealth(makeAgent(), steady);
+    const withEmpty = calculateHealth(makeAgent(), steady, []);
+    expect(withEmpty.score).toBe(without.score);
+  });
+
+  it('penalizes the score for a detected anomaly', () => {
+    const healthy = calculateHealth(makeAgent(), steady);
+    const withStall = calculateHealth(makeAgent(), steady, [
+      { kind: 'stall', severity: 'warning', t: 0, message: 'stalled', value: 0 },
+    ]);
+    expect(withStall.score).toBeLessThan(healthy.score);
+  });
+
+  it('penalizes critical anomalies more than warnings', () => {
+    const warn = calculateHealth(makeAgent(), steady, [
+      { kind: 'stall', severity: 'warning', t: 0, message: 's', value: 0 },
+    ]);
+    const crit = calculateHealth(makeAgent(), steady, [
+      { kind: 'stall', severity: 'critical', t: 0, message: 's', value: 0 },
+    ]);
+    expect(crit.score).toBeLessThan(warn.score);
+  });
+
+  it('stacks multiple anomalies and never goes below 0', () => {
+    const h = calculateHealth(makeAgent(), steady, [
+      { kind: 'stall', severity: 'critical', t: 0, message: 's', value: 0 },
+      { kind: 'thrash', severity: 'critical', t: 0, message: 't', value: 5 },
+      { kind: 'spike', severity: 'critical', t: 0, message: 'p', value: 99 },
+    ]);
+    expect(h.score).toBeGreaterThanOrEqual(0);
+    expect(h.score).toBeLessThanOrEqual(100);
+  });
+
+  it('weights a stall more heavily than a spike of the same severity', () => {
+    const stall = calculateHealth(makeAgent(), steady, [
+      { kind: 'stall', severity: 'warning', t: 0, message: 's', value: 0 },
+    ]);
+    const spike = calculateHealth(makeAgent(), steady, [
+      { kind: 'spike', severity: 'warning', t: 0, message: 'p', value: 99 },
+    ]);
+    expect(stall.score).toBeLessThan(spike.score);
+  });
+});

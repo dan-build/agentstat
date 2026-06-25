@@ -10,8 +10,10 @@
   [![license](https://img.shields.io/npm/l/agentstat?style=flat-square)](./LICENSE)
 -->
 
-**Real data. Beautiful charts.**  
-A lightweight, canvas-powered React component for live LLM and agent monitoring.
+**Real-time agent telemetry, rendered honestly.**  
+A lightweight, canvas-powered React component for live LLM and agent monitoring —
+live token rates, progress, status transitions, health scoring, and opt-in
+anomaly detection.
 
 <!--
   Demo recording — replace demo.gif with a ~30s screen capture of
@@ -22,7 +24,9 @@ A lightweight, canvas-powered React component for live LLM and agent monitoring.
 -->
 ![AgentStat demo — live token rates, progress, and health scoring](./demo.gif)
 
-Visually stunning, buttery-smooth performance with Catmull-Rom splines, pulsing live dots, automatic health scoring, and a calm, production-ready aesthetic.
+Catmull-Rom splines with a stable time-anchored axis, a unified live tip, status
+transitions, automatic health scoring, and opt-in anomaly detection — built for
+long-running production monitoring on a single canvas.
 
 ---
 
@@ -30,6 +34,7 @@ Visually stunning, buttery-smooth performance with Catmull-Rom splines, pulsing 
 
 ```bash
 npm install @dan-build/agentstat
+# package name is finalized at publish time; examples below use `agentstat`
 ```
 
 A live-animating chart in four lines, with the built-in simulation and a ready-made roster of demo agents:
@@ -101,7 +106,7 @@ export default function MonitoredChat() {
 ```
 
 See the full integration guide for ready-made patterns:  
-**[→ Real Data Integration](https://agentstat.sdaniel.cc/docs/real-data-integration)** — Vercel AI SDK (`useCompletion`), LangChain / LangGraph, WebSocket / SSE, Model Context Protocol (MCP), VS Code extensions.
+**[→ Real Data Integration](https://agentstat.sdaniel.cc/docs/real-data-integration/)** — Vercel AI SDK (`useCompletion`), LangChain / LangGraph, WebSocket / SSE, Model Context Protocol (MCP), VS Code extensions.
 
 ---
 
@@ -113,11 +118,117 @@ See the full integration guide for ready-made patterns:
 - **Multi-agent support** with individual visibility toggles
 - **Hover tooltips & click callbacks**
 - **Fully imperative ref API** — works perfectly with Vercel AI SDK, LangChain, WebSocket, MCP, etc.
+```tsx
+import { AgentStat, demoAgents } from '@dan-build/agentstat';
+
+// Plot token rate on an auto-scaled axis
+<AgentStat agents={demoAgents} metric="tokens" simulateData height={400} />
+
+// Dual-axis: progress (left, solid) + token rate (right, dashed)
+<AgentStat agents={demoAgents} metric="both" simulateData height={400} />
+
+// Pin the token axis ceiling for a stable scale
+<AgentStat agents={demoAgents} metric="tokens" tokenAxisMax={50} height={400} />
+```
+
+
 - **Retina-ready & performant** — built for long-running production monitoring
 
-> **History window (v0.1):** the chart shows the most recent ~420 samples per agent. The on-screen time span therefore depends on how frequently you call `updateAgent(...)` (e.g. ~20s at 20 Hz, ~80s at 5 Hz). A configurable time window is planned for v0.2.
+> **History window.** With no `windowSeconds` set, the chart shows a bounded
+> rolling view of recent activity (a fixed span, kept short so the line renders
+> without downsampling and stays stable). Set **`windowSeconds`** for an explicit
+> time-based sliding window (e.g. 60 / 300 / 900), which slices each agent's
+> buffer to that span and downsamples (LTTB) when the slice has more points than
+> the canvas can resolve. `maxHistoryPoints` remains as a buffer cap but is no
+> longer the primary control now that eviction is time-based — see `ROADMAP.md`.
 
 ---
+
+## Anomaly detection
+
+AgentStat doesn't just plot your agent's metrics — it can *understand* them.
+Turn on `anomalyDetection` and it watches each agent's token-rate and status
+streams and automatically flags the moments that matter:
+
+```tsx
+<AgentStat
+  agents={agents}
+  anomalyDetection
+  onAnomaly={(agentId, anomaly) => {
+    console.warn(`[${agentId}] ${anomaly.kind}: ${anomaly.message}`);
+    // e.g. page on-call, write to your logging pipeline, etc.
+  }}
+/>
+```
+
+That's the whole setup. Anomalies appear on the chart as markers (a guide line,
+a colored dot, and a label) and fire `onAnomaly`. It works even with a single
+agent and a handful of data points — you don't need production scale to see it
+catch a stall.
+
+### What it detects
+
+| Kind | What it means | How it's detected |
+|------|---------------|-------------------|
+| **stall** | The agent claims to be working (`active`/`thinking`) but isn't producing tokens — a hung tool call, deadlock, or infinite wait. | Token rate at/near zero for a sustained period while status is active. |
+| **spike** | A runaway loop — the agent suddenly burns tokens far above its normal rate. | Statistical outlier (z-score) vs the agent's *own* rolling baseline, so it self-calibrates per agent. |
+| **thrash** | The agent is unstable, flipping between states. | Status changes more than N times within a short window. |
+
+Each anomaly is **explainable** — it carries the numbers that triggered it, e.g.
+`stalled 8s while active` or `token spike 80/s (3.2σ above ~10/s)`.
+
+### Tuning
+
+Defaults are conservative. Override any threshold via `anomalyConfig`:
+
+```tsx
+<AgentStat
+  agents={agents}
+  anomalyDetection
+  anomalyConfig={{
+    stallDurationMs: 3000,  // flag a stall after 3s (default 5s)
+    spikeZScore: 4,         // require a bigger outlier (default 3)
+    thrashChangeCount: 6,   // tolerate more status churn (default 4)
+  }}
+/>
+```
+
+### Reading anomalies programmatically
+
+```tsx
+const ref = useRef<AgentStatRef>(null);
+// ...
+const active = ref.current?.getAnomalies('chat-agent') ?? [];
+if (active.some(a => a.kind === 'stall')) { /* ... */ }
+```
+
+### Health score
+
+When detection is on, the per-agent **health score** is penalized by these real,
+observed signals (a stall counts against health more than a transient spike).
+This is grounded in actual behavior rather than a hand-supplied confidence value.
+
+### Use it standalone
+
+The detector is exported, so you can run it on your own buffers without the
+chart:
+
+```tsx
+import { detectAnomalies, DEFAULT_ANOMALY_CONFIG } from '@dan-build/agentstat';
+
+const anomalies = detectAnomalies(
+  tokenSamples,   // {t, v}[]
+  statusChanges,  // {t, status}[]
+  currentStatus,
+  performance.now(),
+  DEFAULT_ANOMALY_CONFIG
+);
+```
+
+> **Note:** detection is opt-in and off by default. The thresholds are reasoned
+> defaults, not tuned against a corpus of real agents — the on-chart markers make
+> miscalibration obvious, so tune to your workload.
+
 
 ## Browser support
 
@@ -127,10 +238,10 @@ AgentStat uses Canvas2D and modern CSS color syntax (`rgb(r g b / alpha)`). This
 
 ## Documentation
 
-- [Overview & Features](https://agentstat.sdaniel.cc/docs/overview)
-- [Real Data Integration](https://agentstat.sdaniel.cc/docs/real-data-integration)
-- [API Reference](https://agentstat.sdaniel.cc/docs/api-reference)
-- [Examples](https://agentstat.sdaniel.cc/docs/examples)
+- [Overview & Features](https://agentstat.sdaniel.cc/docs/overview/)
+- [Real Data Integration](https://agentstat.sdaniel.cc/docs/real-data-integration/)
+- [API Reference](https://agentstat.sdaniel.cc/docs/api-reference/)
+- [Examples](https://agentstat.sdaniel.cc/docs/examples/)
 
 ---
 
