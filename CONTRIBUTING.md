@@ -17,6 +17,9 @@ Regenerate the screenshots after any visual change. The scene in
 `dev/Showcase.tsx` is scripted and deterministic. Preview it at
 `/?shot=light` or `/?shot=dark`.
 
+For UI changes, also check the worst-case scenes in `dev/BreakIt.tsx`:
+`/?break=many|menu|long|narrow|short|rtl|empty`, each with `&theme=dark` too.
+
 Node 20 or newer.
 
 ## Layout

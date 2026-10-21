@@ -9,6 +9,7 @@ import React, {
   useImperativeHandle,
   useMemo,
   useId,
+  useLayoutEffect,
   useSyncExternalStore,
 } from 'react';
 
@@ -100,6 +101,12 @@ export interface AgentStatProps {
   style?: React.CSSProperties;
   /** Accessible name for the chart. Defaults to a description of the roster. */
   ariaLabel?: string;
+  /**
+   * The per-agent panel (rate, health, status) over the bottom-left of the
+   * chart. `'auto'` (default) hides it when the chart is too small for it to
+   * leave the data readable (under 560 × 340 px).
+   */
+  panel?: 'auto' | 'always' | 'never';
   /**
    * Hard cap on samples kept per agent and series. Retention is time-based
    * (1.5× the visible window); this cap only bounds memory for very high
@@ -460,6 +467,32 @@ const buildRoster = (agents: Agent[], maxHistoryPoints: number) => {
   return { list, byId, props, progress, tokens, status };
 };
 
+// useLayoutEffect warns during server rendering in React 18; it only matters
+// in the browser anyway.
+const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
+
+// Measure UI text with the same font the chips use, to decide how many legend
+// chips fit on one row. Falls back to an average glyph width.
+let measureCtx: CanvasRenderingContext2D | null | undefined;
+const measureChipText = (text: string): number => {
+  if (measureCtx === undefined) {
+    try {
+      measureCtx = typeof document !== 'undefined' ? document.createElement('canvas').getContext('2d') : null;
+    } catch {
+      measureCtx = null;
+    }
+  }
+  const w = measureCtx && typeof measureCtx.measureText === 'function'
+    ? ((measureCtx.font = `500 12px ${FONT_SANS}`), measureCtx.measureText(text).width)
+    : 0;
+  return w > 0 ? w : text.length * 6.8;
+};
+// Chip chrome: padding (2 × 10) + swatch (8) + gap (6).
+const CHIP_CHROME = 34;
+const CHIP_TEXT_MAX = 16 * 7; // matches the 16ch max width
+const MORE_CHIP = 48;
+const PAUSE_CHIP = 96;
+
 /** Live value of a media query; false during server rendering or when disabled. */
 const useMediaQuery = (query: string, enabled = true): boolean =>
   useSyncExternalStore(
@@ -484,16 +517,26 @@ const CSS = `
 .agentstat-canvas{display:block;width:100%;height:100%;border-radius:12px;cursor:crosshair;background:var(--as-bg);border:1px solid var(--as-frame)}
 .agentstat-canvas:focus-visible{outline:2px solid var(--as-focus);outline-offset:2px}
 .agentstat-surface{background:var(--as-surface);border:1px solid transparent;box-shadow:var(--as-shadow);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
-.agentstat-legend{position:absolute;top:12px;right:12px;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px;max-width:calc(100% - 120px)}
-.agentstat-btn{appearance:none;margin:0;display:inline-flex;align-items:center;gap:6px;min-height:24px;padding:0 10px;border-radius:999px;font:500 12px/1 var(--as-font);color:var(--as-text-secondary);cursor:pointer;white-space:nowrap;transition-property:background-color,color,transform;transition-duration:150ms;transition-timing-function:cubic-bezier(0.23,1,0.32,1)}
+.agentstat-legend{position:absolute;top:12px;right:12px;display:flex;flex-wrap:nowrap;justify-content:flex-end;gap:4px;max-width:calc(100% - 120px)}
+.agentstat-more-btn{font-variant-numeric:tabular-nums}
+.agentstat-menu{position:absolute;top:44px;right:12px;z-index:20;display:flex;flex-direction:column;gap:2px;min-width:180px;max-width:min(280px,calc(100% - 24px));max-height:calc(100% - 56px);overflow:auto;overscroll-behavior:contain;padding:4px;border-radius:12px;transform-origin:top right}
+.agentstat-menu .agentstat-btn{justify-content:flex-start;min-height:32px;border-radius:8px;background:transparent;box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none}
+.agentstat-menu .agentstat-btn::before{content:none}
+.agentstat-menu .agentstat-name{max-width:none}
+.agentstat-menu-all{color:var(--as-text-secondary)}
+@media (prefers-reduced-motion:no-preference){.agentstat-menu{transition-property:opacity,scale;transition-duration:150ms;transition-timing-function:cubic-bezier(0.23,1,0.32,1)}@starting-style{.agentstat-menu{opacity:0;scale:0.97}}}
+@starting-style{.agentstat-menu{opacity:0}}
+.agentstat[data-theme-switching] *{transition:none!important}
+.agentstat-btn{position:relative;appearance:none;margin:0;display:inline-flex;align-items:center;gap:6px;min-height:24px;padding:0 10px;border-radius:999px;font:500 12px/1 var(--as-font);color:var(--as-text-secondary);cursor:pointer;white-space:nowrap;transition-property:background-color,color,transform;transition-duration:150ms;transition-timing-function:cubic-bezier(0.23,1,0.32,1)}
 .agentstat-btn[aria-pressed="true"]{color:var(--as-text)}
 .agentstat-btn.is-off{color:var(--as-text-tertiary)}
 .agentstat-btn:focus-visible{outline:2px solid var(--as-focus);outline-offset:2px}
+.agentstat-btn::before{content:"";position:absolute;inset:-8px -2px}
 @media (hover:hover) and (pointer:fine){.agentstat-btn:hover{background-image:linear-gradient(var(--as-selected),var(--as-selected))}}
 @media (prefers-reduced-motion:no-preference){.agentstat-btn:active{transform:scale(0.96)}}
 .agentstat-swatch{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:var(--c);box-shadow:inset 0 0 0 1.5px var(--c)}
 .agentstat-btn.is-off .agentstat-swatch{background:transparent}
-.agentstat-name{overflow:hidden;text-overflow:ellipsis;min-width:0;max-width:16ch}
+.agentstat-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;max-width:16ch}
 .agentstat-panel{position:absolute;left:12px;bottom:12px;padding:8px 10px;border-radius:10px;pointer-events:none;display:grid;grid-template-columns:auto minmax(0,auto) auto auto auto;column-gap:10px;row-gap:4px;align-items:center;font-size:12px;line-height:1.3;max-width:calc(100% - 24px)}
 .agentstat-head{font-size:11px;font-weight:500;letter-spacing:0.05em;text-transform:uppercase;color:var(--as-text-tertiary);white-space:nowrap}
 .agentstat-num{font-variant-numeric:tabular-nums;text-align:right;color:var(--as-text);white-space:nowrap}
@@ -505,7 +548,7 @@ const CSS = `
 .agentstat-status svg{flex-shrink:0}
 .agentstat-pause{position:absolute;left:12px;top:12px}
 .agentstat-icon{position:relative;width:12px;height:12px;flex-shrink:0}
-.agentstat-icon svg{position:absolute;inset:0;transition-property:opacity,transform,filter;transition-duration:200ms;transition-timing-function:cubic-bezier(0.2,0,0,1)}
+.agentstat-icon svg{position:absolute;inset:0;transition-property:opacity,transform,filter;transition-duration:300ms;transition-timing-function:cubic-bezier(0.2,0,0,1)}
 .agentstat-icon svg[data-on="false"]{opacity:0;transform:scale(0.25);filter:blur(4px)}
 @media (prefers-reduced-motion:reduce){.agentstat-icon svg{transition-property:opacity}.agentstat-icon svg[data-on="false"]{transform:none;filter:none}}
 .agentstat-tooltip{position:absolute;left:0;top:0;z-index:10;pointer-events:none;padding:6px 10px;border-radius:8px;font-size:12px;line-height:1.35;white-space:nowrap;color:var(--as-text);transform:translate(-50%,calc(-100% - 12px))}
@@ -563,6 +606,31 @@ const StatusIcon = ({ status }: { status: AgentStatus }) => {
   }
 };
 
+/** Legend chip / menu row that shows or hides one agent. */
+const AgentToggle = ({
+  row,
+  color,
+  onToggle,
+}: {
+  row: RowSnapshot;
+  color: string;
+  onToggle: (id: string) => void;
+}) => (
+  <button
+    type="button"
+    className={`agentstat-btn agentstat-surface${row.visible ? '' : ' is-off'}`}
+    aria-pressed={row.visible}
+    title={row.name}
+    onClick={() => onToggle(row.id)}
+    style={{ '--c': color } as React.CSSProperties}
+  >
+    <span className="agentstat-swatch" aria-hidden="true" />
+    <span className="agentstat-name">
+      <bdi>{row.name}</bdi>
+    </span>
+  </button>
+);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -585,6 +653,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
     className,
     style: rootStyle,
     ariaLabel,
+    panel = 'auto',
     maxHistoryPoints = DEFAULT_CAP,
     metric = 'progress',
     tokenAxisMax,
@@ -705,6 +774,13 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
   const [paused, setPaused] = useState(false);
   const [hover, setHover] = useState<HoverInfo | null>(null);
   const descId = useId();
+  const menuId = useId();
+  // Rendered size in CSS px, for layout decisions in the DOM overlays. 0×0
+  // until measured (and during server rendering).
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  const [menuOpen, setMenuOpen] = useState(false);
+  const moreBtnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const systemDark = useMediaQuery('(prefers-color-scheme: dark)', theme === 'system');
 
   // ── Theme
@@ -756,6 +832,25 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
     themeRef.current = { mode, t: tokens };
     resolveTheme();
   }, [mode, tokens, resolveTheme]);
+
+  // Switching theme must not animate every color at once: disable overlay
+  // transitions before the new colors paint, restore them after two frames.
+  const prevModeRef = useRef(mode);
+  useIsomorphicLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root || prevModeRef.current === mode) return;
+    prevModeRef.current = mode;
+    root.setAttribute('data-theme-switching', '');
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => root.removeAttribute('data-theme-switching'));
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+      root.removeAttribute('data-theme-switching');
+    };
+  }, [mode]);
 
   /** Color for a roster entry: its own color, else the palette by position. */
   const colorOf = useCallback((rec: AgentRecord, index: number) => {
@@ -1524,15 +1619,18 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
       ctx.font = `500 12px ${FONT_SANS}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(
+      const msg =
         agentsRef.current.length === 0
           ? 'No agents to display'
           : visibleCount === 0
             ? 'All agents hidden — use the legend to show one'
-            : 'Waiting for telemetry…',
-        PAD.left + w / 2,
-        PAD.top + h / 2
-      );
+            : 'Waiting for telemetry…';
+      // A background halo keeps the message clear of the grid line behind it.
+      ctx.lineWidth = 8;
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = tk.bg;
+      ctx.strokeText(msg, PAD.left + w / 2, PAD.top + h / 2);
+      ctx.fillText(msg, PAD.left + w / 2, PAD.top + h / 2);
     }
   };
 
@@ -1632,6 +1730,9 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
     ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
     gradientCacheRef.current.key = '';
     dirtyRef.current = true;
+    const w = Math.round(rect.width);
+    const h = Math.round(rect.height);
+    setSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
   }, []);
 
   useEffect(() => {
@@ -1796,6 +1897,28 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
     selectPoint(rec, raw, drawn, clamp(i, 0, drawn.length - 1), view);
   };
 
+  const handleShowAll = () => {
+    for (const id of rows.map((r) => r.id)) {
+      const rec = byIdRef.current.get(id);
+      if (rec) rec.visible = true;
+    }
+    tokenMaxCacheRef.current.bucket = -1;
+    dirtyRef.current = true;
+    publishSnapshot();
+  };
+
+  // Close the overflow menu on a pointer press outside it.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (menuRef.current?.contains(t) || moreBtnRef.current?.contains(t)) return;
+      setMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, [menuOpen]);
+
   const handleToggleAgent = (id: string) => {
     const rec = byIdRef.current.get(id);
     if (!rec) return;
@@ -1810,6 +1933,27 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
   const colorFor = (r: RowSnapshot) => r.color ?? palette[rows.indexOf(r) % palette.length];
   const visibleRows = rows.filter((r) => r.visible);
   const panelRows = visibleRows.slice(0, MAX_PANEL_ROWS);
+  const showPanel =
+    panel === 'always' || (panel === 'auto' && (size.w === 0 || (size.w >= 560 && size.h >= 340)));
+
+  // Legend: one row of chips; whatever doesn't fit moves into a "+N" menu.
+  let chipCount = rows.length;
+  if (size.w > 0) {
+    const available = size.w - 24 - PAUSE_CHIP - 8;
+    const widths = rows.map((r) => Math.min(CHIP_TEXT_MAX, measureChipText(r.name)) + CHIP_CHROME);
+    const total = widths.reduce((a, b) => a + b, 0) + Math.max(0, widths.length - 1) * 4;
+    if (total > available) {
+      let used = MORE_CHIP;
+      chipCount = 0;
+      while (chipCount < widths.length && used + widths[chipCount] + 4 <= available) {
+        used += widths[chipCount] + 4;
+        chipCount++;
+      }
+    }
+  }
+  const chipRows = rows.slice(0, chipCount);
+  const overflowRows = rows.slice(chipCount);
+  const hiddenCount = rows.length - visibleRows.length;
   const label =
     ariaLabel ??
     `Live agent telemetry chart, ${visibleRows.length} of ${rows.length} agent${rows.length === 1 ? '' : 's'} shown.`;
@@ -1835,6 +1979,9 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
       ref={rootRef}
       className={className ? `agentstat ${className}` : 'agentstat'}
       data-theme={mode}
+      // The chart is laid out left to right in every locale (time runs left to
+      // right); names in any script are isolated with <bdi>.
+      dir="ltr"
       style={{ width: '100%', height, ...rootVars, ...rootStyle }}
     >
       <style>{CSS}</style>
@@ -1864,24 +2011,52 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
 
       {rows.length > 0 && (
         <div className="agentstat-legend" role="group" aria-label="Agents">
-          {rows.map((r) => (
+          {chipRows.map((r) => (
+            <AgentToggle key={r.id} row={r} color={colorFor(r)} onToggle={handleToggleAgent} />
+          ))}
+          {overflowRows.length > 0 && (
             <button
-              key={r.id}
+              ref={moreBtnRef}
               type="button"
-              className={`agentstat-btn agentstat-surface${r.visible ? '' : ' is-off'}`}
-              aria-pressed={r.visible}
-              title={r.name}
-              onClick={() => handleToggleAgent(r.id)}
-              style={{ '--c': colorFor(r) } as React.CSSProperties}
+              className="agentstat-btn agentstat-surface agentstat-more-btn"
+              aria-expanded={menuOpen}
+              aria-controls={menuId}
+              aria-label={`${overflowRows.length} more agent${overflowRows.length === 1 ? '' : 's'}`}
+              onClick={() => setMenuOpen((o) => !o)}
             >
-              <span className="agentstat-swatch" aria-hidden="true" />
-              <span className="agentstat-name">{r.name}</span>
+              +{overflowRows.length}
             </button>
+          )}
+        </div>
+      )}
+
+      {menuOpen && overflowRows.length > 0 && (
+        <div
+          ref={menuRef}
+          id={menuId}
+          className="agentstat-menu agentstat-surface"
+          role="group"
+          aria-label="More agents"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.stopPropagation();
+              setMenuOpen(false);
+              moreBtnRef.current?.focus();
+            }
+          }}
+        >
+          {hiddenCount > 0 && (
+            <button type="button" className="agentstat-btn agentstat-menu-all" onClick={handleShowAll}>
+              Show all agents
+            </button>
+          )}
+          {overflowRows.map((r) => (
+            <AgentToggle key={r.id} row={r} color={colorFor(r)} onToggle={handleToggleAgent} />
           ))}
         </div>
       )}
 
-      {panelRows.length > 0 && (
+      {showPanel && panelRows.length > 0 && (
         <div className="agentstat-panel agentstat-surface" aria-hidden="true">
           <span />
           <span className="agentstat-head">Agent</span>
@@ -1892,7 +2067,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
             <React.Fragment key={r.id}>
               <span className="agentstat-swatch" style={{ '--c': colorFor(r) } as React.CSSProperties} />
               <span className="agentstat-name agentstat-secondary" title={r.name}>
-                {r.name}
+                <bdi>{r.name}</bdi>
               </span>
               <span className="agentstat-num">{formatRate(r.rate)}</span>
               <span className="agentstat-num">{r.score === null ? '–' : formatInt(r.score)}</span>
@@ -1939,7 +2114,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
         >
           <div className="agentstat-tooltip-head">
             <span className="agentstat-swatch" style={{ '--c': hover.color } as React.CSSProperties} />
-            <span>{hover.name}</span>
+            <bdi>{hover.name}</bdi>
             <span className="agentstat-tooltip-age">
               {formatAgo(hover.ageMs)}
             </span>

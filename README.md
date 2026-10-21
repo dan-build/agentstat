@@ -10,7 +10,7 @@
 A React component that shows what your agents are doing right now: token rate,
 progress and status over time, a health score built only from signals you
 actually provide, and opt-in detection of stalls, runaway spikes and status
-thrashing. One canvas, about 16 KB min+gzip, no dependencies besides React.
+thrashing. One canvas, about 17 KB min+gzip, no dependencies besides React.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/dan-build/agentstat/main/docs/screenshot-dark.png">
@@ -95,9 +95,12 @@ More integrations — LangChain, WebSocket/SSE, MCP — are in the
   (`"tokens"`), or both on two axes (`"both"`). Time is labelled relative to now.
 - **A live tip** at the right edge for agents that are reporting. An agent that
   stops reporting keeps its line where its data ends; nothing is extrapolated.
-- **A legend** to show or hide agents. Hidden agents are still monitored.
+- **A legend** to show or hide agents. It stays on one row; agents that don't
+  fit move into a "+N" menu with a "Show all" shortcut. Hidden agents are
+  still monitored.
 - **A panel** with each agent's rate, health and status (text and icon, not
-  color alone).
+  color alone). By default it steps aside on small charts so the data stays
+  readable (`panel="auto"`; or `"always"` / `"never"`).
 - **Hover or keyboard inspection** of any sample, with its age, rate, progress
   and the status it had at that moment.
 
@@ -179,6 +182,7 @@ const found = detectAnomalies(tokenSamples, statusChanges, 'active', performance
 | `onPointClick` | `(id, point) => void` | — | Click or Enter on a sample. |
 | `simulateData` | `boolean \| { seed?: number }` | `false` | Demo data. |
 | `maxHistoryPoints` | `number` | `100000` | Memory cap per series; retention is time-based. |
+| `panel` | `'auto' \| 'always' \| 'never'` | `'auto'` | The per-agent panel; `auto` hides it under 560 × 340 px. |
 | `ariaLabel` | `string` | generated | Accessible name of the chart. |
 | `className`, `style` | | — | Applied to the root. |
 
@@ -248,6 +252,9 @@ Omit `color` on agents to use the palette, which switches with the theme.
   values snap instead of easing, and controls don't scale on press.
 - **Not color alone:** status and severity are always paired with text, icons
   or marker shapes.
+- **Any language:** the chart is laid out left to right in every locale, since
+  time runs left to right. Agent names in any script, including Arabic and
+  Hebrew, render correctly.
 
 ## Framework notes
 
