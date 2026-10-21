@@ -2,7 +2,7 @@
 
 All notable changes to AgentStat are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [SemVer](https://semver.org/).
 
-## [0.4.1] — Unreleased
+## [0.4.1] — 2026-10-21
 
 An interface review under worst-case conditions: many agents, very long names,
 phone-width and short charts, right-to-left pages and empty states.
