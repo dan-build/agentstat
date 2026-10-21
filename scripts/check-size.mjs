@@ -8,7 +8,10 @@ import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { build, transform } from 'esbuild';
 
-const BUDGETS = { 'dist/index.js': 17_000, 'dist/index.cjs': 17_500 };
+// Raise deliberately, with a reason in the commit. History: 9 KB (0.3) →
+// 17 KB (0.4: accessibility, theming) → 18 KB (0.4.1: legend overflow menu,
+// adaptive panel).
+const BUDGETS = { 'dist/index.js': 18_000, 'dist/index.cjs': 19_000 };
 const TREESHAKE_BUDGET = 2_000;
 
 let failed = false;

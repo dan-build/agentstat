@@ -2,6 +2,42 @@
 
 All notable changes to AgentStat are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [SemVer](https://semver.org/).
 
+## [0.4.1] — Unreleased
+
+An interface review under worst-case conditions: many agents, very long names,
+phone-width and short charts, right-to-left pages and empty states.
+
+### Added
+
+- **Legend overflow menu.** The legend stays on one row. Agents that don't fit
+  move into a "+N" menu with a "Show all agents" shortcut. It closes on Escape
+  (returning focus) or on a click outside.
+- **`panel: 'auto' | 'always' | 'never'`.** By default the per-agent panel hides
+  on charts under 560 × 340 px, where it used to cover half the data.
+
+### Fixed
+
+- **24 agents:** the legend wrapped into several rows over the plot.
+- **Long names:** they wrapped onto multiple lines in the panel. They're now
+  truncated on one line, with the full name on hover.
+- **Rates of 100 t/s and up** drop the decimal (`4,814 t/s`, not `4,814.0 t/s`).
+- **Right-to-left pages:** units flipped (`t/s 14.0`) and time ticks reversed
+  (`4s−`). The chart is now always laid out left to right, and names are
+  isolated so any script renders correctly.
+- **Empty-state text** was crossed by a grid line.
+- **Theme switches** no longer animate every color at once.
+
+### Changed
+
+- **Buttons have 40 px tall hit areas** (24 px visible), without overlapping
+  their neighbors.
+- **The pause/resume icon swap** takes 300 ms, matching the other icon
+  transitions.
+- **The panel's rate** shows the latest sample rather than the eased line tip.
+- **Development tooling upgraded:** React 19 (React 18 still tested), Vite 8,
+  Vitest 5, TypeScript 6, tsup 9. CI runs on Node 22 and 24. Node 20 is end-of-life,
+  and Vitest 5 requires Node 22.12 or newer.
+
 ## [0.4.0] — 2026-10-21
 
 A reliability, honesty and polish release. The chart can no longer be stopped

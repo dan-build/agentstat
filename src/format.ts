@@ -16,9 +16,9 @@ const rateFmt = () =>
   (rateNf ??= new Intl.NumberFormat(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }));
 const intFmt = () => (intNf ??= new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }));
 
-/** Token rate, e.g. `14.8 t/s`. Never renders NaN. */
+/** Token rate, e.g. `14.8 t/s`, `4,814 t/s` (no decimals from 100). Never renders NaN. */
 export const formatRate = (v: number): string =>
-  `${Number.isFinite(v) ? rateFmt().format(v) : '–'}${NNBSP}t/s`;
+  `${Number.isFinite(v) ? (Math.abs(v) >= 100 ? intFmt() : rateFmt()).format(v) : '–'}${NNBSP}t/s`;
 
 /** Whole-number percentage, e.g. `42%`. */
 export const formatPercent = (v: number): string =>
