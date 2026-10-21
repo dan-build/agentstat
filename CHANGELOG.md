@@ -2,7 +2,7 @@
 
 All notable changes to AgentStat are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [SemVer](https://semver.org/).
 
-## [0.4.0] — Unreleased
+## [0.4.0] — 2026-10-21
 
 A reliability, honesty and polish release. The chart can no longer be stopped
 by bad input, every health number now comes from a signal you actually
