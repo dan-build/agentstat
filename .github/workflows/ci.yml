@@ -34,8 +34,8 @@ jobs:
       - run: npm run check:size
       - run: npm run check:package
 
-  react-19:
-    name: React 19
+  react-18:
+    name: React 18
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,6 +44,6 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - run: npm install --no-save react@19 react-dom@19 @types/react@19 @types/react-dom@19
+      - run: npm install --no-save react@18 react-dom@18 @types/react@18 @types/react-dom@18
       - run: npm run typecheck
       - run: npm test
