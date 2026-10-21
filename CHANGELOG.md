@@ -105,8 +105,7 @@ publishing are gated end to end.
   Node 20/22/24 and React 18/19 and runs typecheck, lint, tests, build, a size
   budget, publint and attw.
 - **Publishing is tag-triggered** and runs every check first. It verifies that
-  the tag matches `package.json` and uses npm Trusted Publishing, so no
-  long-lived token is needed.
+  the tag matches `package.json` and publishes with npm provenance.
 - **Dev harness and examples are type-checked.** The Vercel AI SDK example was
   rewritten for v5+ (`useChat`).
 - **Dependabot added.**
