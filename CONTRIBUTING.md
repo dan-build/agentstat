@@ -10,7 +10,12 @@ npm ci
 npm run dev          # demo at http://localhost:5173 (append ?stress for the load test)
 npm test             # unit + component tests
 npm run check        # everything CI runs: typecheck, lint, tests, build, size
+npm run screenshots  # regenerate docs/screenshot-{light,dark}.png
 ```
+
+Regenerate the screenshots after any visual change. The scene in
+`dev/Showcase.tsx` is scripted and deterministic. Preview it at
+`/?shot=light` or `/?shot=dark`.
 
 Node 20 or newer.
 

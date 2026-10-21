@@ -1,7 +1,7 @@
 {
   "name": "@dan-build/agentstat",
   "version": "0.4.0",
-  "description": "Live telemetry for LLM agents in React — token rate, progress, status, health and stall/spike/thrash detection on one canvas.",
+  "description": "Live telemetry for LLM agents in React \u2014 token rate, progress, status, health and stall/spike/thrash detection on one canvas.",
   "author": "dan-build",
   "license": "MIT",
   "type": "module",
@@ -40,7 +40,8 @@
     "check:size": "node scripts/check-size.mjs",
     "check:package": "publint --strict && attw --pack . --profile node16",
     "check": "npm run typecheck && npm run lint && npm test && npm run build && npm run check:size",
-    "prepublishOnly": "npm run check"
+    "prepublishOnly": "npm run check",
+    "screenshots": "node scripts/screenshots.mjs"
   },
   "peerDependencies": {
     "react": ">=18",

@@ -12,7 +12,10 @@ progress and status over time, a health score built only from signals you
 actually provide, and opt-in detection of stalls, runaway spikes and status
 thrashing. One canvas, about 16 KB min+gzip, no dependencies besides React.
 
-![AgentStat — live token rates, progress, and health scoring](./demo.gif)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/dan-build/agentstat/main/docs/screenshot-dark.png">
+  <img src="https://raw.githubusercontent.com/dan-build/agentstat/main/docs/screenshot-light.png" alt="AgentStat showing three agents' token rates over 30 seconds. The Coder agent has stopped producing output while still reporting Active, and a red marker reads “Coder · stalled 15s while active”. A tooltip inspects a Planner sample: 3.3 t/s, 46%, Thinking." width="100%">
+</picture>
 
 ---
 

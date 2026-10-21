@@ -821,7 +821,9 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
       color: r.color,
       visible: r.visible,
       status: r.current.status,
-      rate: liveValuesRef.current.get(r.id)?.tokensRate ?? r.current.tokensRate,
+      // The latest real sample, not the eased tip value: frames can be
+      // throttled (background tabs), and a readout must not lag behind data.
+      rate: r.current.tokensRate,
       score: healthCacheRef.current.get(r.id)?.score ?? null,
     }));
     setRows((prev) => {

@@ -92,6 +92,10 @@ publishing are gated end to end.
 
 - **The library build is unminified**, so bundlers can tree-shake it. Shipped
   size is ~16 KB min+gzip, guarded by a size budget in CI.
+- **The panel shows the latest sample**, not the eased line tip, so it can't lag
+  behind the data when animation frames are throttled (background tabs).
+- **The README uses light and dark screenshots** instead of a 6.7 MB GIF. They
+  are generated reproducibly with `npm run screenshots`.
 - **Status is no longer shown in all caps**, and labels moved to a system UI
   font with tabular figures for live numbers.
 
