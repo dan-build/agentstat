@@ -4,9 +4,13 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Minor and patch updates arrive together in one PR. Major versions come as
+    # separate PRs, so one breaking tool can't block every other update.
     groups:
-      dev-dependencies:
+      dev-minor-and-patch:
         dependency-type: development
+        update-types: [minor, patch]
+    open-pull-requests-limit: 10
   - package-ecosystem: github-actions
     directory: /
     schedule:
