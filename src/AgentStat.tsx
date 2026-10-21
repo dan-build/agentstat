@@ -9,6 +9,7 @@ import React, {
   useImperativeHandle,
   useMemo,
   useId,
+  useSyncExternalStore,
 } from 'react';
 
 import { TimeSeriesBuffer, type TSPoint } from './timeseries';
@@ -234,6 +235,8 @@ type HoverTarget = {
 
 type HoverInfo = {
   agentId: string;
+  /** Age of the sample when it was selected, in ms. */
+  ageMs: number;
   name: string;
   color: string;
   point: AgentDataPoint;
@@ -398,6 +401,77 @@ const watchMedia = (query: string, cb: (matches: boolean) => void): (() => void)
   return () => mq.removeListener?.(handler);
 };
 
+/** Normalize an `Agent` prop into the component's mutable record. */
+const makeRecord = (a: Agent): AgentRecord => {
+  const num = (v: unknown, lo: number, hi: number) =>
+    typeof v === 'number' && Number.isFinite(v) ? clamp(v, lo, hi) : 0;
+  const status = AGENT_STATUSES.includes(a.current?.status) ? a.current.status : 'active';
+  return {
+    id: a.id,
+    name: a.name ?? a.id,
+    color: a.color,
+    config: a.config,
+    visible: a.visible ?? true,
+    current: {
+      ...a.current,
+      tokensRate: num(a.current?.tokensRate, 0, Infinity),
+      progress: num(a.current?.progress, 0, 100),
+      status,
+    },
+  };
+};
+
+/**
+ * Buffers for one agent, holding one real sample: the state the consumer
+ * declared. No backfilled history — a telemetry chart must not draw data
+ * that never happened.
+ */
+const createSeries = (rec: AgentRecord, maxHistoryPoints: number, now: number) => {
+  const cap = Math.max(2, Math.floor(maxHistoryPoints) || DEFAULT_CAP);
+  const progress = new TimeSeriesBuffer(cap);
+  const tokens = new TimeSeriesBuffer(cap);
+  progress.push(now, rec.current.progress);
+  tokens.push(now, rec.current.tokensRate);
+  const status = new StatusLog();
+  status.record(now, rec.current.status);
+  return { progress, tokens, status };
+};
+
+/** Build roster state from the `agents` prop (first render only). */
+const buildRoster = (agents: Agent[], maxHistoryPoints: number) => {
+  const list: AgentRecord[] = [];
+  const byId = new Map<string, AgentRecord>();
+  const props = new Map<string, Agent>();
+  const progress = new Map<string, TimeSeriesBuffer>();
+  const tokens = new Map<string, TimeSeriesBuffer>();
+  const status = new Map<string, StatusLog>();
+  const now = typeof performance !== 'undefined' ? performance.now() : 0;
+  for (const a of Array.isArray(agents) ? agents : []) {
+    if (!a || typeof a.id !== 'string' || props.has(a.id)) continue;
+    const rec = makeRecord(a);
+    const series = createSeries(rec, maxHistoryPoints, now);
+    list.push(rec);
+    byId.set(a.id, rec);
+    props.set(a.id, a);
+    progress.set(a.id, series.progress);
+    tokens.set(a.id, series.tokens);
+    status.set(a.id, series.status);
+  }
+  return { list, byId, props, progress, tokens, status };
+};
+
+/** Live value of a media query; false during server rendering or when disabled. */
+const useMediaQuery = (query: string, enabled = true): boolean =>
+  useSyncExternalStore(
+    useCallback((onChange: () => void) => (enabled ? watchMedia(query, onChange) : () => {}), [query, enabled]),
+    () =>
+      enabled &&
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia(query).matches,
+    () => false
+  );
+
 // ─────────────────────────────────────────────────────────────────────────────
 // STYLES — scoped to the component's class names. Motion is opt-in under
 // prefers-reduced-motion: no-preference; hover styling only on devices that
@@ -542,12 +616,16 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
   const frameErrorRef = useRef(false);
 
   // ── Canonical data store (refs only; the draw loop never reads React state)
-  const agentsRef = useRef<AgentRecord[]>([]);
-  const byIdRef = useRef<Map<string, AgentRecord>>(new Map());
-  const propsByIdRef = useRef<Map<string, Agent>>(new Map());
-  const progressBufferRef = useRef<Map<string, TimeSeriesBuffer>>(new Map());
-  const tokensBufferRef = useRef<Map<string, TimeSeriesBuffer>>(new Map());
-  const statusLogRef = useRef<Map<string, StatusLog>>(new Map());
+  // The initial roster is built once, purely, so the legend and panel are in
+  // the first (and server-rendered) markup; the effect below reconciles later
+  // changes to the `agents` prop.
+  const [initialRoster] = useState(() => buildRoster(initialAgents, maxHistoryPoints));
+  const agentsRef = useRef<AgentRecord[]>(initialRoster.list);
+  const byIdRef = useRef<Map<string, AgentRecord>>(initialRoster.byId);
+  const propsByIdRef = useRef<Map<string, Agent>>(initialRoster.props);
+  const progressBufferRef = useRef<Map<string, TimeSeriesBuffer>>(initialRoster.progress);
+  const tokensBufferRef = useRef<Map<string, TimeSeriesBuffer>>(initialRoster.tokens);
+  const statusLogRef = useRef<Map<string, StatusLog>>(initialRoster.status);
   const latencyLogRef = useRef<Map<string, number[]>>(new Map());
   const liveValuesRef = useRef<Map<string, LiveValues>>(new Map());
   const healthCacheRef = useRef<Map<string, HealthMetrics>>(new Map());
@@ -626,8 +704,8 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
   const [alertText, setAlertText] = useState('');
   const [paused, setPaused] = useState(false);
   const [hover, setHover] = useState<HoverInfo | null>(null);
-  const [systemDark, setSystemDark] = useState(false);
   const descId = useId();
+  const systemDark = useMediaQuery('(prefers-color-scheme: dark)', theme === 'system');
 
   // ── Theme
   const mode: ThemeMode =
@@ -652,16 +730,6 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
   const frameColor = styles.borderColor || (mode === 'dark' ? '#1f1f23' : '#e7e7e4');
   // Canvas can't resolve var(); this holds the resolved values for drawing.
   const themeRef = useRef<{ mode: ThemeMode; t: ThemeTokens }>({ mode, t: tokens });
-
-  useEffect(() => {
-    if (theme !== 'system') return;
-    setSystemDark(
-      typeof window !== 'undefined' &&
-        typeof window.matchMedia === 'function' &&
-        window.matchMedia('(prefers-color-scheme: dark)').matches
-    );
-    return watchMedia('(prefers-color-scheme: dark)', setSystemDark);
-  }, [theme]);
 
   useEffect(() => {
     reducedMotionRef.current = prefersReducedMotion();
@@ -716,39 +784,11 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
 
   const ensureBuffers = useCallback((rec: AgentRecord) => {
     if (progressBufferRef.current.has(rec.id)) return;
-    const cap = Math.max(2, Math.floor(latest.current.maxHistoryPoints) || DEFAULT_CAP);
-    const pBuf = new TimeSeriesBuffer(cap);
-    const tBuf = new TimeSeriesBuffer(cap);
-    // One real sample: the state the consumer declared. No backfilled
-    // history — a telemetry chart must not draw data that never happened.
-    const now = performance.now();
-    pBuf.push(now, rec.current.progress);
-    tBuf.push(now, rec.current.tokensRate);
-    progressBufferRef.current.set(rec.id, pBuf);
-    tokensBufferRef.current.set(rec.id, tBuf);
-    const log = new StatusLog();
-    log.record(now, rec.current.status);
-    statusLogRef.current.set(rec.id, log);
+    const series = createSeries(rec, latest.current.maxHistoryPoints, performance.now());
+    progressBufferRef.current.set(rec.id, series.progress);
+    tokensBufferRef.current.set(rec.id, series.tokens);
+    statusLogRef.current.set(rec.id, series.status);
   }, []);
-
-  const makeRecord = (a: Agent): AgentRecord => {
-    const num = (v: unknown, lo: number, hi: number) =>
-      typeof v === 'number' && Number.isFinite(v) ? clamp(v, lo, hi) : 0;
-    const status = AGENT_STATUSES.includes(a.current?.status) ? a.current.status : 'active';
-    return {
-      id: a.id,
-      name: a.name ?? a.id,
-      color: a.color,
-      config: a.config,
-      visible: a.visible ?? true,
-      current: {
-        ...a.current,
-        tokensRate: num(a.current?.tokensRate, 0, Infinity),
-        progress: num(a.current?.progress, 0, 100),
-        status,
-      },
-    };
-  };
 
   const dropAgentState = (id: string) => {
     byIdRef.current.delete(id);
@@ -805,13 +845,6 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
     dirtyRef.current = true;
   };
 
-  // Build the roster synchronously on first render so the legend and panel
-  // are present in the initial (and server) markup.
-  const initializedRef = useRef(false);
-  if (!initializedRef.current) {
-    initializedRef.current = true;
-    syncRoster(initialAgents);
-  }
 
   // ── DOM snapshot (legend, panel, screen-reader summary)
   const publishSnapshot = useCallback(() => {
@@ -1554,7 +1587,9 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
     draw(ctx, canvas, now);
   };
   const frameRef = useRef(frame);
-  frameRef.current = frame;
+  useEffect(() => {
+    frameRef.current = frame;
+  });
 
   useEffect(() => {
     let raf = 0;
@@ -1653,6 +1688,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
     const idx = agentsRef.current.indexOf(rec);
     setHover({
       agentId: rec.id,
+      ageMs: view.viewNow - p.t,
       name: rec.name,
       color: rec.color ?? themeRef.current.t.palette[idx % themeRef.current.t.palette.length],
       point,
@@ -1905,7 +1941,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
             <span className="agentstat-swatch" style={{ '--c': hover.color } as React.CSSProperties} />
             <span>{hover.name}</span>
             <span className="agentstat-tooltip-age">
-              {formatAgo((pausedAtRef.current ?? performance.now()) - hover.point.time)}
+              {formatAgo(hover.ageMs)}
             </span>
           </div>
           <div className="agentstat-tooltip-body">
