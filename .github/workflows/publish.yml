@@ -1,29 +1,49 @@
 name: Publish to npm
 
+# Publishes when a version tag is pushed (e.g. `git tag v0.4.0 && git push --tags`).
+# The tag must match package.json, and every check must pass first.
+#
+# Auth uses npm Trusted Publishing (OIDC) — no long-lived token. One-time setup
+# on npmjs.com: package settings → Trusted Publisher → GitHub Actions, repository
+# dan-build/agentstat, workflow publish.yml, environment npm.
 on:
-  workflow_dispatch:        # Run manually from browser
+  push:
+    tags: ['v*']
 
 permissions:
   contents: read
-  id-token: write           # Required for Trusted Publishing later
+  id-token: write # OIDC for Trusted Publishing + provenance
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: npm
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Publish to npm
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          cache: npm
+      - run: npm ci
+      - name: Tag matches package.json version
+        run: |
+          VERSION="v$(node -p "require('./package.json').version")"
+          if [ "$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json $VERSION" >&2
+            exit 1
+          fi
+      - run: npm run check
+      - run: npm run check:package
+      - name: Publish
+        run: |
+          # Pre-release versions (e.g. 0.5.0-beta.1) go to the "next" tag.
+          if node -p "require('./package.json').version" | grep -q -- '-'; then
+            npm publish --provenance --access public --tag next
+          else
+            npm publish --provenance --access public
+          fi

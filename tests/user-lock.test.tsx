@@ -13,6 +13,9 @@ const makeAgent = (id: string): Agent => ({
   current: { tokensRate: 15, progress: 0, status: 'active' },
 });
 
+// The simulator is seeded so these tests are deterministic (previously ~1 in
+// 10 runs failed when a random tick re-rolled an anomaly mid-assertion).
+//
 // Advance long enough that the simulation's auto-recovery threshold
 // (~55 ticks × 55ms = ~3s) is well behind us.
 async function advancePastAutoRecoveryWindow() {
@@ -36,7 +39,7 @@ describe('user-lock: simulation respects consumer-set anomalous status (Item 4)'
       <AgentStat
         ref={ref}
         agents={[makeAgent('a')]}
-        simulateData={true}
+        simulateData={{ seed: 7 }}
       />
     );
 
@@ -56,7 +59,7 @@ describe('user-lock: simulation respects consumer-set anomalous status (Item 4)'
       <AgentStat
         ref={ref}
         agents={[makeAgent('a')]}
-        simulateData={true}
+        simulateData={{ seed: 7 }}
       />
     );
 
@@ -74,7 +77,7 @@ describe('user-lock: simulation respects consumer-set anomalous status (Item 4)'
       <AgentStat
         ref={ref}
         agents={[makeAgent('a')]}
-        simulateData={true}
+        simulateData={{ seed: 7 }}
       />
     );
 
@@ -109,7 +112,7 @@ describe('user-lock: simulation respects consumer-set anomalous status (Item 4)'
       <AgentStat
         ref={ref}
         agents={[makeAgent('a'), makeAgent('b')]}
-        simulateData={true}
+        simulateData={{ seed: 7 }}
       />
     );
 

@@ -5,9 +5,14 @@ export default defineConfig({
   format: ['esm', 'cjs'],
   dts: true,
   clean: true,
-  minify: true,
+  // Unminified on purpose: consumers minify, and keeping the output readable
+  // preserves the pure annotations that let bundlers tree-shake it.
+  minify: false,
   external: ['react', 'react-dom'],
-  treeshake: true,
   splitting: false,
   sourcemap: true,
+  // Bundling drops module-level directives, so restore it: without it,
+  // importing the component from a React Server Component (Next.js App
+  // Router) fails on the first hook.
+  banner: { js: "'use client';" },
 });

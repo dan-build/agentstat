@@ -1,0 +1,26 @@
+name: Bug report
+description: Something renders wrong, throws, or behaves unexpectedly.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: A minimal component (or a sandbox link). `simulateData={{ seed: 1 }}` makes demo data reproducible.
+      render: tsx
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: "@dan-build/agentstat 0.4.0, React 19.1, Next 15, Chrome 140"
+    validations:
+      required: true

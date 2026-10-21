@@ -2,6 +2,115 @@
 
 All notable changes to AgentStat are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [SemVer](https://semver.org/).
 
+## [0.4.0] — Unreleased
+
+A reliability, honesty and polish release. The chart can no longer be stopped
+by bad input, every health number now comes from a signal you actually
+supplied, and the component got a full visual and accessibility pass. CI and
+publishing are gated end to end.
+
+### Breaking
+
+- **`HealthMetrics.hallucinationRisk` is `number | null`.** It used to default
+  to 10% for every agent, a number nothing measured. It's now `null` unless you
+  pass `confidenceScore` or report status `'hallucinating'`.
+- **`HealthMetrics.latencyTrend` is a real trend, or `null`.** It used to
+  classify one latency sample against fixed thresholds (and was always
+  `'stable'`, because `latencyMs` couldn't be reported). It now compares recent
+  `latencyMs` reports and is `null` until there are four.
+- **`tokenEfficiency` scales with the band.** The fall-off outside
+  `expectedTokensPerSec` is relative to the band's upper edge instead of a fixed
+  4 points per token/s, so it means the same thing for 10 t/s and 1000 t/s
+  agents.
+- **No backfilled history.** Each agent starts with one real sample (its
+  declared `current` state) instead of 80 fabricated ones. This also removes a
+  false *critical* spike on the first real update and a fake average that hid
+  real values from health scoring.
+- **`createAgent` and `demoAgents` no longer set a color.** They use the theme
+  palette, which reads on light and dark backgrounds. (The old `#111111` default
+  was invisible on dark.)
+
+### Added
+
+- **Partial updates:** `updateAgent(id, { tokensRate?, progress?, status?,
+  latencyMs?, confidenceScore?, errorCount? })`. Omitted fields keep their
+  value. The positional form still works.
+- **`theme: 'light' | 'dark' | 'system'`**, with contrast-checked tokens and a
+  hue-distinct default palette. `styles` accepts any CSS color, including
+  `var(--token)`.
+- **`onPointClick`** (replaces the misnamed `onSpikeClick`, which still works).
+- **`simulateData={{ seed }}`** for reproducible demos and tests.
+- **`ariaLabel`**; `height` accepts any CSS length.
+- **Relative time axis** (`−5s … now`) and a `t/s` unit caption on token axes.
+- **Keyboard inspection:** ←/→ samples, ↑/↓ agents, Home/End, Enter, Esc.
+- **Accessibility:** screen-reader summary of every visible agent; anomalies
+  announced through live regions; legend chips and Pause are `aria-pressed`
+  toggles with focus rings and 24 px targets; status shown with text and icon;
+  severity shown with marker shape (▲ warning, ◆ critical) as well as color;
+  `prefers-reduced-motion` respected.
+- **Stall detection for silent agents:** no data at all for `stallDurationMs`
+  while active now counts as a stall.
+
+### Fixed
+
+- **Any non-hex color stopped the chart permanently.** `'red'`, `#f00`, `rgb()`
+  or `var()` made the gradient code throw inside the animation loop. Colors are
+  now parsed safely, and a failing frame can no longer stop the loop.
+- **`NaN` / `Infinity` poisoned the chart.** `NaN` made health `NaN` for good;
+  `Infinity` pinned the token axis at infinity. Non-finite values are rejected.
+- **Stale window:** with `windowSeconds` set, an agent that stopped reporting
+  left a smear of expired points at the left edge.
+- **Thrash off-by-one:** the status in effect at the window start was counted as
+  a change, flagging normal thinking↔active loops.
+- **Repeated `onAnomaly` calls** every 500 ms for one ongoing incident. It now
+  fires once per episode (and on escalation).
+- **Hiding an agent stopped monitoring it** (no anomalies, no health updates).
+- **Hidden agents forced 60 fps redraws forever.**
+- **Pause only paused the simulator.** It now freezes the view while data keeps
+  buffering.
+- **Container resizes and display changes were missed.** Sizing now uses
+  `ResizeObserver` and tracks `devicePixelRatio` changes.
+- **1-hour windows silently showed ~17 minutes.**
+- **`maxHistoryPoints` had no effect.** It's now an exact memory cap, default
+  100 000; retention stays time-based.
+- **Changes to `name`, `color`, `config` or `visible`** on existing agents in
+  the `agents` prop were silently ignored.
+- **The downsample cache was invalidated on every sample** at long windows
+  (several ms per frame at 15 min). It now recomputes at most once per bucket.
+- **Dead buffer space wasn't reclaimed** until 20 000 stale samples had
+  accumulated.
+- **Theme switches kept stale gradients**; non-hex backgrounds picked the wrong
+  overlay theme.
+- **Next.js App Router:** `'use client'` was stripped from the build.
+- **TypeScript CommonJS consumers** (`node16` / `nodenext`) resolved ESM types.
+- **Tree-shaking:** importing only `detectAnomalies` pulled in the whole
+  component (15.5 KB → ~1 KB).
+- **React 19 typings.**
+- **The flaky user-lock test** is now deterministic.
+
+### Changed
+
+- **The library build is unminified**, so bundlers can tree-shake it. Shipped
+  size is ~16 KB min+gzip, guarded by a size budget in CI.
+- **The panel shows the latest sample**, not the eased line tip, so it can't lag
+  behind the data when animation frames are throttled (background tabs).
+- **The README uses light and dark screenshots** instead of a 6.7 MB GIF. They
+  are generated reproducibly with `npm run screenshots`.
+- **Status is no longer shown in all caps**, and labels moved to a system UI
+  font with tabular figures for live numbers.
+
+### Infrastructure
+
+- **CI now runs** (the workflow lived outside `.github/workflows/`). It covers
+  Node 20/22/24 and React 18/19 and runs typecheck, lint, tests, build, a size
+  budget, publint and attw.
+- **Publishing is tag-triggered** and runs every check first. It verifies that
+  the tag matches `package.json` and uses npm Trusted Publishing, so no
+  long-lived token is needed.
+- **Dev harness and examples are type-checked.** The Vercel AI SDK example was
+  rewritten for v5+ (`useChat`).
+- **Dependabot added.**
+
 ## [0.3.0] — 2026-06-25
 
 Two themes in this release. First, **anomaly detection** — the first feature that

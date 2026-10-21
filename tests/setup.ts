@@ -63,6 +63,8 @@ function makeContextMock(): CanvasRenderingContext2D {
 }
 
 beforeAll(() => {
+  // Node-environment tests (e.g. SSR) have no DOM to patch.
+  if (typeof HTMLCanvasElement === 'undefined') return;
   HTMLCanvasElement.prototype.getContext = (function () {
     return makeContextMock();
   } as unknown) as typeof HTMLCanvasElement.prototype.getContext;

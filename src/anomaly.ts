@@ -13,7 +13,7 @@
 //   - Conservative by default: a detector that cries wolf is worse than none.
 //   - Every result is explainable — it carries the numbers that triggered it.
 
-import type { AgentStatus } from './AgentStat';
+import type { AgentStatus } from './types';
 
 export type AnomalyKind = 'stall' | 'spike' | 'thrash';
 export type AnomalySeverity = 'warning' | 'critical';
@@ -81,10 +81,12 @@ export function meanStd(values: number[]): { mean: number; std: number } {
 }
 
 /**
- * Detect a STALL: token rate has stayed at/below `stallRateThreshold` for at
- * least `stallDurationMs`, while the agent's current status is 'active' or
- * 'thinking' (i.e. it claims to be working but isn't producing output).
- * Returns the anomaly anchored at the start of the idle stretch, or null.
+ * Detect a STALL while the agent's current status is 'active' or 'thinking'
+ * (it claims to be working but isn't producing output). Two cases:
+ *   - idle: the token rate has stayed at/below `stallRateThreshold` for at
+ *     least `stallDurationMs`, anchored at the start of the idle stretch;
+ *   - silent: no sample has arrived at all for `stallDurationMs` (a dropped
+ *     stream or a hung tool call), anchored at the last sample.
  */
 export function detectStall(
   tokens: TokenSample[],
@@ -96,15 +98,26 @@ export function detectStall(
   if (currentStatus !== 'active' && currentStatus !== 'thinking') return null;
   if (tokens.length === 0) return null;
 
-  // Walk backwards from the latest sample while rate is idle; measure the span.
   let i = tokens.length - 1;
-  if (tokens[i].v > cfg.stallRateThreshold) return null; // currently producing
-  const endT = tokens[i].t;
+  const last = tokens[i];
+  if (last.v > cfg.stallRateThreshold) {
+    // Producing as of the last sample — unless the stream has gone quiet.
+    const silentMs = now - last.t;
+    if (silentMs < cfg.stallDurationMs) return null;
+    return {
+      kind: 'stall',
+      severity: silentMs >= cfg.stallDurationMs * 2 ? 'critical' : 'warning',
+      t: last.t,
+      message: `no data for ${Math.round(silentMs / 1000)}s while ${currentStatus}`,
+      value: 0,
+    };
+  }
+
+  // Walk backwards from the latest sample while rate is idle; measure the span.
   while (i >= 0 && tokens[i].v <= cfg.stallRateThreshold) i--;
   const startT = tokens[i + 1].t;
-  const idleMs = endT - startT;
   // Use "now" as the true end so a stall that's ongoing keeps growing.
-  const sustainedMs = Math.max(idleMs, now - startT);
+  const sustainedMs = Math.max(last.t - startT, now - startT);
   if (sustainedMs < cfg.stallDurationMs) return null;
 
   const secs = Math.round(sustainedMs / 1000);
@@ -180,7 +193,10 @@ export function detectThrash(
 ): Anomaly | null {
   if (changes.length < cfg.thrashChangeCount) return null;
   const cutoff = now - cfg.thrashWindowMs;
-  const recent = changes.filter((c) => c.t >= cutoff);
+  // Strictly after the cutoff: a status log reports the status already in
+  // effect at the window start as an entry AT the cutoff, which is context,
+  // not a change.
+  const recent = changes.filter((c) => c.t > cutoff);
   if (recent.length < cfg.thrashChangeCount) return null;
   return {
     kind: 'thrash',

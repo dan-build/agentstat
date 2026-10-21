@@ -1,19 +1,25 @@
 {
   "name": "@dan-build/agentstat",
-  "version": "0.3.0",
-  "description": "Canvas-rendered React component for real-time LLM agent telemetry — live token rates, progress, status transitions, and health scoring.",
+  "version": "0.4.0",
+  "description": "Live telemetry for LLM agents in React \u2014 token rate, progress, status, health and stall/spike/thrash detection on one canvas.",
   "author": "dan-build",
   "license": "MIT",
   "type": "module",
-  "main": "./dist/index.js",
+  "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
-    }
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist"
@@ -26,37 +32,43 @@
     "dev": "vite",
     "build": "tsup",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
-    "lint": "eslint src",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.dev.json",
+    "lint": "eslint src tests dev examples",
     "test": "vitest run",
     "test:watch": "vitest",
-    "publish:beta": "npm publish --tag beta",
-    "prepublishOnly": "npm run build"
+    "test:coverage": "vitest run --coverage",
+    "check:size": "node scripts/check-size.mjs",
+    "check:package": "publint --strict && attw --pack . --profile node16",
+    "check": "npm run typecheck && npm run lint && npm test && npm run build && npm run check:size",
+    "prepublishOnly": "npm run check",
+    "screenshots": "node scripts/screenshots.mjs"
   },
   "peerDependencies": {
     "react": ">=18",
     "react-dom": ">=18"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
     "@eslint/js": "^9.39.4",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
-    "@vitest/coverage-v8": "^4.1.4",
+    "@vitest/coverage-v8": "^4.1.12",
     "eslint": "^9.39.4",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^5.2.0",
     "globals": "^15.15.0",
     "happy-dom": "^20.9.0",
+    "publint": "^0.3.25",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tsup": "^8.0.2",
     "typescript": "^5.4.5",
     "typescript-eslint": "^8.58.2",
     "vite": "^6.2.0",
-    "vitest": "^4.1.4"
+    "vitest": "^4.1.12"
   },
   "keywords": [
     "agent",

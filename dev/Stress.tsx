@@ -49,7 +49,6 @@ export default function Stress() {
         id: `agent-${i}`,
         name: `Agent ${i}`,
         color: COLORS[i % COLORS.length],
-        data: [],
         visible: true,
         config: { expectedTokensPerSec: [8, 24] as [number, number] },
         current: { tokensRate: 12, progress: 0, status: 'active' as const },

@@ -13,11 +13,10 @@ describe('public API surface', () => {
     const agent = pkg.createAgent('a', 'Agent A');
     expect(agent.id).toBe('a');
     expect(agent.name).toBe('Agent A');
-    expect(agent.color).toBe('#111111');
+    // No color → the theme palette picks one (contrast-checked on light and dark).
+    expect(agent.color).toBeUndefined();
     expect(agent.visible).toBe(true);
     expect(agent.current.status).toBe('active');
-    expect(Array.isArray(agent.data)).toBe(true);
-    expect(agent.data).toHaveLength(0);
   });
 
   it('accepts a custom color in createAgent', () => {
