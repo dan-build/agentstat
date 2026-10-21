@@ -3,17 +3,16 @@ name: Publish to npm
 # Publishes when a version tag is pushed (e.g. `git tag v0.4.0 && git push --tags`).
 # The tag must match package.json, and every check must pass first.
 #
-# Auth uses the NPM_TOKEN repository secret (a granular npm token with publish
-# access). Provenance is still attested through GitHub's OIDC token. To move to
-# token-less Trusted Publishing later, configure it on npmjs.com and remove the
-# NODE_AUTH_TOKEN line below.
+# Auth uses npm Trusted Publishing (OIDC): no stored token. The trusted
+# publisher on npmjs.com is dan-build/agentstat, workflow publish.yml,
+# environment npm. npm is phasing out publishing with 2FA-bypass tokens.
 on:
   push:
     tags: ['v*']
 
 permissions:
   contents: read
-  id-token: write # provenance attestation
+  id-token: write # OIDC for Trusted Publishing + provenance
 
 concurrency:
   group: publish
@@ -41,8 +40,6 @@ jobs:
       - run: npm run check
       - run: npm run check:package
       - name: Publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           # Pre-release versions (e.g. 0.5.0-beta.1) go to the "next" tag.
           if node -p "require('./package.json').version" | grep -q -- '-'; then
