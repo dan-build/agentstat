@@ -20,7 +20,7 @@ Regenerate the screenshots after any visual change. The scene in
 For UI changes, also check the worst-case scenes in `dev/BreakIt.tsx`:
 `/?break=many|menu|long|narrow|short|rtl|empty`, each with `&theme=dark` too.
 
-Node 20 or newer.
+Node 22.12 or newer.
 
 ## Layout
 

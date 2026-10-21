@@ -35,7 +35,8 @@ phone-width and short charts, right-to-left pages and empty states.
   transitions.
 - **The panel's rate** shows the latest sample rather than the eased line tip.
 - **Development tooling upgraded:** React 19 (React 18 still tested), Vite 8,
-  Vitest 5, TypeScript 6, tsup 9.
+  Vitest 5, TypeScript 6, tsup 9. CI runs on Node 22 and 24. Node 20 is end-of-life,
+  and Vitest 5 requires Node 22.12 or newer.
 
 ## [0.4.0] — 2026-10-21
 
