@@ -3,16 +3,20 @@ name: Publish to npm
 # Publishes when a version tag is pushed (e.g. `git tag v0.4.0 && git push --tags`).
 # The tag must match package.json, and every check must pass first.
 #
-# Auth uses npm Trusted Publishing (OIDC): no stored token. The trusted
-# publisher on npmjs.com is dan-build/agentstat, workflow publish.yml,
-# environment npm. npm is phasing out publishing with 2FA-bypass tokens.
+# Auth: the NPM_TOKEN secret (a granular npm token with publish access) when
+# it is set; otherwise npm Trusted Publishing (OIDC), once configured on
+# npmjs.com for dan-build/agentstat, workflow publish.yml, environment npm.
+# Either way the release carries a provenance attestation.
+#
+# npm caps publish tokens at 90 days and plans to stop token publishing
+# around January 2027, so Trusted Publishing is the long-term setup.
 on:
   push:
     tags: ['v*']
 
 permissions:
   contents: read
-  id-token: write # OIDC for Trusted Publishing + provenance
+  id-token: write # provenance, and OIDC for Trusted Publishing
 
 concurrency:
   group: publish
@@ -40,6 +44,8 @@ jobs:
       - run: npm run check
       - run: npm run check:package
       - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           # Pre-release versions (e.g. 0.5.0-beta.1) go to the "next" tag.
           if node -p "require('./package.json').version" | grep -q -- '-'; then
