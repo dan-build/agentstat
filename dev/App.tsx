@@ -58,12 +58,8 @@ const THEMES: Record<Mode, Theme> = {
   },
 };
 
-// Agent accent colors. IMPORTANT: AgentStat intentionally ignores color changes
-// to existing agents made through the `agents` prop (runtime values come via
-// updateAgent; the roster prop only defines identity/order). So per-theme colors
-// would silently fail to apply on a light/dark toggle — the agent would keep its
-// first-render color. We therefore choose colors that read clearly on BOTH
-// backgrounds and keep them stable across themes.
+// Agent accent colors, chosen to read clearly on both backgrounds. (Omitting
+// `color` would use the component's theme palette instead.)
 const agentColor = (id: string): string => {
   const map: Record<string, string> = {
     '1': '#6366f1', // indigo — visible on white and near-black
@@ -99,15 +95,19 @@ const TRIGGERS = [
 const MONO = '"IBM Plex Mono", ui-monospace, "Cascadia Code", monospace';
 
 export default function App() {
-  const [mode, setMode] = useState<Mode>('dark');
-  const [metric, setMetric] = useState<'progress' | 'tokens' | 'both'>('progress');
+  // `?theme=light&metric=tokens` preselects the demo state (handy for screenshots).
+  const params = new URLSearchParams(window.location.search);
+  const [mode, setMode] = useState<Mode>(params.get('theme') === 'light' ? 'light' : 'dark');
+  const [metric, setMetric] = useState<'progress' | 'tokens' | 'both'>(
+    (['progress', 'tokens', 'both'] as const).find((m) => m === params.get('metric')) ?? 'progress'
+  );
   const t = THEMES[mode];
 
   const agents = useMemo<Agent[]>(
     () => [
-      { id: '1', name: 'Researcher', color: agentColor('1'), data: [], current: { tokensRate: 14.8, progress: 42, status: 'active' }, visible: true, config: { expectedTokensPerSec: [10, 20] } },
-      { id: '2', name: 'Critic', color: agentColor('2'), data: [], current: { tokensRate: 4.2, progress: 18, status: 'thinking' }, visible: true, config: { expectedTokensPerSec: [5, 15] } },
-      { id: '3', name: 'Executor', color: agentColor('3'), data: [], current: { tokensRate: 21.5, progress: 91, status: 'active' }, visible: true, config: { expectedTokensPerSec: [15, 30] } },
+      { id: '1', name: 'Researcher', color: agentColor('1'), current: { tokensRate: 14.8, progress: 42, status: 'active' }, visible: true, config: { expectedTokensPerSec: [10, 20] } },
+      { id: '2', name: 'Critic', color: agentColor('2'), current: { tokensRate: 4.2, progress: 18, status: 'thinking' }, visible: true, config: { expectedTokensPerSec: [5, 15] } },
+      { id: '3', name: 'Executor', color: agentColor('3'), current: { tokensRate: 21.5, progress: 91, status: 'active' }, visible: true, config: { expectedTokensPerSec: [15, 30] } },
     ],
     []
   );
@@ -189,7 +189,7 @@ export default function App() {
             AgentStat
           </span>
           <span style={{ fontSize: 10.5, letterSpacing: '0.04em', textTransform: 'uppercase', color: t.text3 }}>
-            real-time agent telemetry · v0.3.0
+            real-time agent telemetry · v0.4.0
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
@@ -243,6 +243,7 @@ export default function App() {
               agents={agents}
               height={chartHeight}
               metric={metric}
+              theme={mode}
               simulateData
               anomalyDetection
               onHealthChange={handleHealthChange}
@@ -312,7 +313,7 @@ export default function App() {
           <span style={eyebrow}>Health</span>
           {agents.map((agent) => {
             const live = liveMetrics[agent.id];
-            const h = healthMetrics[agent.id] ?? { score: 100, tokenEfficiency: 100, stability: 100, hallucinationRisk: 0, latencyTrend: 'stable' as const };
+            const h = healthMetrics[agent.id] ?? { score: 100, tokenEfficiency: 100, stability: 100, hallucinationRisk: null, latencyTrend: null };
             const tok = (live?.tokensRate ?? agent.current.tokensRate).toFixed(1);
             const status = live?.status ?? agent.current.status;
             const progress = Math.round(live?.progress ?? agent.current.progress);

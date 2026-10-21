@@ -15,13 +15,10 @@ export function InstantDemo() {
 }
 
 // 2 — One real agent, minimal boilerplate. `createAgent` fills in the
-//     `data`, `current`, and `visible` defaults so you only name the
-//     agent and pick a color.
+//     `current` and `visible` defaults; omit the color to use the theme
+//     palette (contrast-checked on light and dark backgrounds).
 export function SingleAgent() {
-  const agents = useMemo<Agent[]>(
-    () => [createAgent('chat-agent', 'Chat Assistant', '#1d4ed8')],
-    []
-  );
+  const agents = useMemo<Agent[]>(() => [createAgent('chat-agent', 'Chat Assistant')], []);
   return <AgentStat agents={agents} height={400} />;
 }
 
@@ -35,7 +32,6 @@ export function FullControl() {
         id: 'chat-agent',
         name: 'Chat Assistant',
         color: '#1d4ed8',
-        data: [],
         current: { tokensRate: 0, progress: 0, status: 'active' },
         visible: true,
         config: { expectedTokensPerSec: [5, 25] },

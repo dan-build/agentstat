@@ -1,13 +1,11 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import App from './App.tsx';
+import App from './App';
+import Stress from './Stress';
 
-const root = createRoot(document.getElementById('root')!);
+// `npm run dev` opens the demo; append `?stress` for the load-test harness.
+const isStress = new URLSearchParams(window.location.search).has('stress');
 
-root.render(
-  React.createElement(
-    React.StrictMode,
-    null,
-    React.createElement(App)
-  )
+createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>{isStress ? <Stress /> : <App />}</React.StrictMode>
 );

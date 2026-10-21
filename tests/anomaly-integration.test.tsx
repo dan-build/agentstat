@@ -16,7 +16,7 @@ const makeAgent = (id: string): Agent => ({
 
 // Drives N idle (0 t/s) updates while the agent stays 'active', which should
 // trip the stall detector. Uses a tight stall threshold so the test is fast.
-async function driveStall(ref: React.RefObject<AgentStatRef>) {
+async function driveStall(ref: React.RefObject<AgentStatRef | null>) {
   for (let i = 0; i < 40; i++) {
     act(() => {
       ref.current?.updateAgent('a', 0, 10, 'active');
@@ -58,7 +58,7 @@ describe('anomaly detection — component wiring', () => {
     expect(found.some((x) => x.kind === 'stall')).toBe(true);
   });
 
-  it('fires onAnomaly once per occurrence, not every interval', async () => {
+  it('fires onAnomaly once per episode (plus once on escalation), not every interval', async () => {
     const onAnomaly = vi.fn<(id: string, a: Anomaly) => void>();
     const ref = createRef<AgentStatRef>();
     render(
@@ -82,8 +82,9 @@ describe('anomaly detection — component wiring', () => {
       });
     }
     const stallCalls = onAnomaly.mock.calls.filter(([, a]) => a.kind === 'stall');
-    // The stall anchor time is stable, so it should fire once, not ~10×.
-    expect(stallCalls.length).toBe(1);
+    // One episode: it opens as a warning and escalates to critical once the
+    // stall doubles in length — two calls, never one per detection tick.
+    expect(stallCalls.map(([, a]) => a.severity)).toEqual(['warning', 'critical']);
     expect(stallCalls[0][0]).toBe('a');
   });
 

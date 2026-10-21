@@ -1,0 +1,12 @@
+{
+  // Type-checks the dev harness and examples against the library source.
+  // examples/vercel-ai-sdk.tsx is excluded: `ai` isn't a dependency here.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": { "@dan-build/agentstat": ["src/index.ts"] }
+  },
+  "include": ["src", "dev", "examples"],
+  "exclude": ["examples/vercel-ai-sdk.tsx"]
+}

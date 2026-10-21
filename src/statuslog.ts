@@ -9,9 +9,9 @@
 //
 // This is what lets the hover tooltip report the status at the hovered point
 // (not just the agent's current status) and lets the draw loop color line
-// segments by status without per-sample overhead.
+// segments by status without per-sample overhead (planned).
 
-import type { AgentStatus } from './AgentStat';
+import type { AgentStatus } from './types';
 
 export interface StatusTransition {
   /** Timestamp (performance.now() domain) at which this status became active. */

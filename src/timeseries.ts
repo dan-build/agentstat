@@ -12,8 +12,8 @@
 //   - Downsampling: when a sliced window has far more points than the canvas has
 //     pixels, reduce to a visually faithful subset via LTTB (Largest-Triangle-
 //     Three-Buckets), which preserves peaks/troughs far better than naive
-//     stride sampling. Results are cached on (windowMs, targetPoints, lastT,
-//     length) so a static view costs nothing per frame.
+//     stride sampling. Results are cached on the slice bounds (or a wall-time
+//     bucket when downsampling) so a static view costs nothing per frame.
 
 export interface TSPoint {
   /** Timestamp in ms (performance.now() domain or Date.now() — caller's choice, must be consistent). */
@@ -28,7 +28,9 @@ export interface DownsampleResult {
   downsampled: boolean;
 }
 
-const DEFAULT_CAP = 20_000;
+// Safety cap only — retention is normally governed by time-based eviction.
+// 100k samples covers a 1h window at ~25 Hz.
+const DEFAULT_CAP = 100_000;
 
 /**
  * Return the value of the sample whose timestamp is closest to `t`, or
@@ -56,8 +58,8 @@ export function nearestValueAt(arr: TSPoint[], t: number): number | undefined {
 }
 
 export class TimeSeriesBuffer {
-  // Ring-free implementation: a plain array with head-trim eviction. We keep a
-  // start index to avoid O(n) shifts on every append; compaction happens lazily.
+  // Plain array with head-trim eviction. A start index avoids O(n) shifts on
+  // every append; compaction happens lazily once the dead head dominates.
   private buf: TSPoint[] = [];
   private start = 0;
   private readonly hardCap: number;
@@ -80,41 +82,75 @@ export class TimeSeriesBuffer {
     return this.length > 0 ? this.buf[this.buf.length - 1].t : -Infinity;
   }
 
-  /** Append a sample. Monotonic time is assumed (caller passes increasing t). */
+  /** Timestamp of the oldest live sample, or +Infinity if empty. */
+  get firstT(): number {
+    return this.length > 0 ? this.buf[this.start].t : Infinity;
+  }
+
+  /** The most recent sample, or undefined if empty. */
+  last(): TSPoint | undefined {
+    return this.length > 0 ? this.buf[this.buf.length - 1] : undefined;
+  }
+
+  /**
+   * Append a sample. Time must be non-decreasing; a sample older than the
+   * newest one is clamped forward so the buffer stays sorted (binary searches
+   * and the time axis both depend on that). Non-finite values are rejected.
+   */
   push(t: number, v: number): void {
-    this.buf.push({ t, v });
+    if (!Number.isFinite(t) || !Number.isFinite(v)) return;
+    const lastT = this.lastT;
+    this.buf.push({ t: t < lastT ? lastT : t, v });
     // Hard cap by count to bound memory even if eviction-by-time isn't called.
     if (this.buf.length - this.start > this.hardCap) {
       this.start = this.buf.length - this.hardCap;
     }
-    // Compact when the dead head grows large, to reclaim memory. Compaction
-    // shifts indices and resets start, so it MUST invalidate the cache (the
-    // start-index component of the bucketed key would otherwise collide).
-    if (this.start > this.hardCap) {
-      this.buf = this.buf.slice(this.start);
-      this.start = 0;
-      this.cacheVal = null;
-    }
-    // NOTE: we deliberately do NOT null cacheVal on the normal path. The cache
-    // key encodes everything that affects the result — on the exact path it
-    // includes lastT and length (self-invalidates every push); on the bucketed
-    // path it includes the time bucket and start index (stable within a bucket
-    // by design). Manual invalidation there would defeat the bucketing.
+    this.maybeCompact();
   }
 
   /** Drop samples older than (now - retentionMs). */
   evictOlderThan(now: number, retentionMs: number): void {
-    const cutoff = now - retentionMs;
-    let s = this.start;
-    while (s < this.buf.length && this.buf[s].t < cutoff) s++;
-    if (s !== this.start) {
-      this.start = s;
-    }
-    if (this.start > this.hardCap) {
+    const s = this.lowerBound(now - retentionMs);
+    if (s > this.start) this.start = s;
+    this.maybeCompact();
+  }
+
+  // Reclaim the dead head once it outweighs the live samples. Compaction
+  // shifts indices, so it must drop the cache (exact keys embed indices).
+  private maybeCompact(): void {
+    if (this.start > 1024 && this.start >= this.buf.length - this.start) {
       this.buf = this.buf.slice(this.start);
       this.start = 0;
       this.cacheVal = null;
     }
+  }
+
+  // First live index whose timestamp is >= t (buf.length if none). O(log n).
+  private lowerBound(t: number): number {
+    let lo = this.start;
+    let hi = this.buf.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (this.buf[mid].t < t) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
+  /**
+   * Live samples with timestamp >= t, as a new array. O(log n + k). Used by the
+   * detectors and health scoring so they read a bounded recent span instead of
+   * copying the whole buffer.
+   */
+  since(t: number): TSPoint[] {
+    return this.buf.slice(this.lowerBound(t));
+  }
+
+  /** Values of live samples with timestamp >= t. */
+  valuesSince(t: number): number[] {
+    const out: number[] = [];
+    for (let i = this.lowerBound(t); i < this.buf.length; i++) out.push(this.buf[i].v);
+    return out;
   }
 
   /** All live samples (no copy of individual points; slices the live window). */
@@ -174,33 +210,24 @@ export class TimeSeriesBuffer {
     targetPoints: number,
     recomputeMs = 0
   ): DownsampleResult {
-    // Decide up front whether this call will downsample, so we can pick the
-    // right cache-key granularity. Cheap: just a length check against target.
-    const sliceLenEstimate = this.length;
-    const willDownsample =
-      sliceLenEstimate > targetPoints && targetPoints >= 3;
+    // Slice bounds first (binary search), so the cache key can reflect exactly
+    // which samples are in view. Without the cutoff in the key, a quiet agent
+    // kept serving points that had already scrolled out of the window.
+    const lo =
+      windowMs !== undefined ? this.lowerBound(now - windowMs) : this.start;
+    const sliceLen = this.buf.length - lo;
+    const willDownsample = sliceLen > targetPoints && targetPoints >= 3;
 
-    // On the downsampled path, optionally quantize lastT into recomputeMs
-    // buckets so the key is stable across frames within a bucket. We also drop
-    // the exact `length` from the key there — within a bucket, a few added
-    // samples don't change the downsampled shape, and including length would
-    // force a recompute on every push and defeat the bucketing. The `start`
-    // index (head eviction) IS included so a window slide still invalidates.
-    let key: string;
-    if (willDownsample && recomputeMs > 0) {
-      const bucket = Math.floor(this.lastT / recomputeMs);
-      key = `${windowMs ?? 'all'}:${targetPoints}:b${bucket}:s${this.start}`;
-    } else {
-      key = `${windowMs ?? 'all'}:${targetPoints}:${this.lastT}:${this.length}`;
-    }
+    // Downsampled path: quantize on wall time so LTTB reruns at most once per
+    // `recomputeMs`, regardless of how many samples arrive in between (the live
+    // tip is drawn separately, so the lag is invisible). Exact path: key on the
+    // slice bounds so every new or expired sample is reflected immediately.
+    const key =
+      willDownsample && recomputeMs > 0
+        ? `d:${windowMs ?? 'all'}:${targetPoints}:${Math.floor(now / recomputeMs)}`
+        : `e:${windowMs ?? 'all'}:${targetPoints}:${lo}:${this.buf.length}`;
     if (this.cacheVal && this.cacheKey === key) return this.cacheVal;
 
-    // Slice to window.
-    let lo = this.start;
-    if (windowMs !== undefined) {
-      const cutoff = now - windowMs;
-      while (lo < this.buf.length && this.buf[lo].t < cutoff) lo++;
-    }
     const slice = this.buf.slice(lo);
 
     let result: DownsampleResult;
