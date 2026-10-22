@@ -51,4 +51,10 @@ const out = await build({
 const shaken = gzipSync(out.outputFiles[0].contents).length;
 report(shaken <= TREESHAKE_BUDGET, `tree-shaken detectAnomalies import: ${shaken} B (budget ${TREESHAKE_BUDGET} B)`);
 
+// Internal members are renamed at build time (mangleProps /^_/). A public
+// name starting with "_" would be renamed in the code but not in the types.
+const dts = readFileSync('dist/index.d.ts', 'utf8');
+const underscored = dts.match(/\b_[A-Za-z]\w*/g) ?? [];
+report(underscored.length === 0, `dist/index.d.ts exposes no _-prefixed names${underscored.length ? `: ${[...new Set(underscored)].join(', ')}` : ''}`);
+
 process.exit(failed ? 1 : 0);

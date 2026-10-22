@@ -49,3 +49,5 @@ jobs:
       - run: npm install --no-save react@18 react-dom@18 @types/react@18 @types/react-dom@18
       - run: npm run typecheck
       - run: npm test
+      - run: npm run build
+      - run: npm run test:dist
