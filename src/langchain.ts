@@ -101,14 +101,28 @@ const callsTools = (output: unknown): boolean => {
 type Kind = 'model' | 'tool' | 'chain';
 type Run = { kind: Kind; root: string; agent?: string; name: string; streamed: boolean };
 
+/** Stopped by the caller (AbortSignal), not failed. */
+const aborted = (err: unknown) => {
+  const name = (err as { name?: unknown } | null)?.name;
+  return name === 'AbortError' || name === 'ModelAbortError';
+};
+
 /**
  * Shared state machine. An agent starts when its first model or tool run
- * opens and finishes when its last one closes (a model run that asked for
- * tools hands over to them instead). The end of the outermost run (the root)
- * closes whatever it left open. `implicitRoot`: events carry no parent ids
- * (streamEvents), so everything belongs to the first run until it ends.
+ * opens. When its last one closes it is handing over (a tool call, the next
+ * model call) until it continues — or until another agent of the same
+ * invocation starts working, or the invocation ends: then it finishes. The
+ * end of the outermost run (the root) closes whatever it left open.
+ * `implicitRoot`: events carry no parent ids (streamEvents), so everything
+ * belongs to the first run until it ends. `report`: what to do with an error
+ * thrown by the sink.
  */
-function createMapper(sink: EventSink, options: LangChainOptions, implicitRoot: boolean) {
+function createMapper(
+  sink: EventSink,
+  options: LangChainOptions,
+  implicitRoot: boolean,
+  report?: (err: unknown) => void
+) {
   const count = options.countTokens ?? estimate;
   const pick = options.agentId;
   const runs = new Map<string, Run>();
@@ -116,18 +130,18 @@ function createMapper(sink: EventSink, options: LangChainOptions, implicitRoot: 
   const open = new Map<string, number>();
   const busy = new Set<string>();
   const byRoot = new Map<string, Set<string>>();
+  // Agents with nothing open that haven't finished: root they belong to.
+  const handover = new Map<string, string>();
   let current: string | undefined;
 
   const emit = (id: string, e: AgentEvent) => {
     if (e.type === 'finish') busy.delete(id);
     else busy.add(id);
+    if (!report) return sink.push(id, e);
     try {
       sink.push(id, e);
     } catch (err) {
-      // A failing sink must not break the run it observes.
-      setTimeout(() => {
-        throw err;
-      });
+      report(err);
     }
   };
 
@@ -145,6 +159,17 @@ function createMapper(sink: EventSink, options: LangChainOptions, implicitRoot: 
     }
     const r: Run = { kind, root, agent, name: run.name ?? '', streamed: false };
     runs.set(runId, r);
+    // Work starting elsewhere in the invocation: agents that handed over and
+    // didn't continue are done. The agent's own next run continues it.
+    if (kind !== 'chain') {
+      for (const [other, otherRoot] of Array.from(handover)) {
+        if (other === agent) handover.delete(other);
+        else if (otherRoot === root) {
+          handover.delete(other);
+          if (!open.has(other)) emit(other, { type: 'finish' });
+        }
+      }
+    }
     if (agent) {
       open.set(agent, (open.get(agent) ?? 0) + 1);
       const set = byRoot.get(root) ?? new Set<string>();
@@ -171,9 +196,13 @@ function createMapper(sink: EventSink, options: LangChainOptions, implicitRoot: 
     // Runs it left open (no end event came) close with it.
     for (const [id, r] of Array.from(runs)) if (r.root === rootId) close(id, r);
     for (const agent of byRoot.get(rootId) ?? []) {
-      if (open.has(agent) || !busy.has(agent)) continue;
+      if (open.has(agent)) continue;
+      const wasBusy = busy.has(agent);
+      // A failed invocation (recursion limit, a node's exception) counts
+      // against every agent it used, even ones that had already finished.
       if (error) emit(agent, { type: 'error' });
-      emit(agent, { type: 'finish' });
+      if (wasBusy || error) emit(agent, { type: 'finish' });
+      handover.delete(agent);
     }
     byRoot.delete(rootId);
     if (current === rootId) current = undefined;
@@ -217,8 +246,13 @@ function createMapper(sink: EventSink, options: LangChainOptions, implicitRoot: 
         }
       }
       const idle = close(runId, r);
-      if (idle && (error || !callsTools(output))) emit(idle, { type: 'finish' });
-      ended(runId, r, error);
+      if (idle) {
+        // Asked for tools (or structured output): hand over to what's next.
+        if (!error && callsTools(output)) handover.set(idle, r.root);
+        else emit(idle, { type: 'finish' });
+      }
+      // A model call at the root reported its own error above.
+      ended(runId, r, false);
     },
     toolStart(runId: string, parentRunId: string | undefined, run: LangChainRun) {
       const r = begin(runId, parentRunId, 'tool', run);
@@ -228,17 +262,19 @@ function createMapper(sink: EventSink, options: LangChainOptions, implicitRoot: 
       const r = runs.get(runId);
       if (!r) return;
       if (r.agent) emit(r.agent, { type: 'tool-end', name: r.name, error });
-      // Nothing else open: e.g. a supervisor handed off to a sub-agent.
+      // Nothing else open: the agent's next model call continues it; another
+      // agent starting (a supervisor handed off) finishes it.
       const idle = close(runId, r);
-      if (idle) emit(idle, { type: 'finish' });
-      ended(runId, r, error);
+      if (idle) handover.set(idle, r.root);
+      ended(runId, r, false);
     },
     /** End everything (a stream that stopped or threw). */
     endAll(error: boolean) {
-      for (const root of Array.from(new Set([...byRoot.keys(), ...[...runs.values()].map((r) => r.root)]))) {
-        endRoot(root, error);
-      }
+      // Roots with agents need ending; the rest only need forgetting.
+      for (const root of Array.from(byRoot.keys())) endRoot(root, error);
       runs.clear();
+      handover.clear();
+      current = undefined;
     },
   };
 }
@@ -361,8 +397,8 @@ export function createLangChainCallbacks(sink: EventSink, options: LangChainOpti
     handleLLMEnd(output, runId) {
       m.modelEnd(runId, output);
     },
-    handleLLMError(_err, runId) {
-      m.modelEnd(runId, undefined, true);
+    handleLLMError(err, runId) {
+      m.modelEnd(runId, undefined, !aborted(err));
     },
     handleToolStart(tool, _input, runId, parentRunId, tags, metadata, runName) {
       m.toolStart(runId, parentRunId, run(tool, metadata, tags, runName));
@@ -399,7 +435,8 @@ export interface LangChainTap {
  * reading it, call `tap.end(true)` — or use `tapLangChainStream`, which does.
  */
 export function createLangChainTap(sink: EventSink, options: LangChainOptions): LangChainTap {
-  const m = createMapper(sink, options, true);
+  // Your loop calls the tap: a failing sink is reported, not thrown into it.
+  const m = createMapper(sink, options, true, (err) => console.error('[agentstat]', err));
   const tap = ((e: LangChainStreamEvent) => {
     if (!e || typeof e.event !== 'string' || typeof e.run_id !== 'string') return;
     const run: LangChainRun = { name: e.name, metadata: e.metadata, tags: e.tags };
@@ -450,7 +487,7 @@ export async function tapLangChainStream(
   try {
     for await (const e of events) tap(e);
   } catch (err) {
-    tap.end(true);
+    tap.end(!aborted(err));
     throw err;
   }
   tap.end(false);

@@ -183,7 +183,8 @@ await tapLangChainStream(stream, graph.streamEvents(input, { version: 'v2' }), {
 An agent is busy while it has a model or tool run open — streamed tokens (or
 the reported output tokens of a call that didn't stream), and tool calls as
 `waiting` — and complete once nothing is running; the end of the invocation
-closes whatever it left open, failing the agents if it errored.
+closes whatever it left open, failing the agents if it errored (a stopped
+run, via an AbortSignal, isn't an error).
 `streamEvents` has no error events, so feed it through `tapLangChainStream`
 (or call `tap.end(true)` from `createLangChainTap` when the stream throws).
 

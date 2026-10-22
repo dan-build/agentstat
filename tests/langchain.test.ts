@@ -18,7 +18,7 @@ const llm = { id: ['langchain', 'chat_models', 'openai', 'ChatOpenAI'] };
 const withCalls = { generations: [[{ text: '', message: { tool_calls: [{ name: 'Search' }] } }]] };
 
 describe('createLangChainCallbacks', () => {
-  it('maps a ReAct loop as one busy stretch per step', () => {
+  it('maps a ReAct loop as one busy stretch', () => {
     const s = sink();
     const cb = createLangChainCallbacks(s, { agentId: 'a', countTokens: (t) => t.length });
     cb.handleChainStart({}, {}, 'root', undefined, [], {}, undefined, 'LangGraph');
@@ -33,10 +33,8 @@ describe('createLangChainCallbacks', () => {
     cb.handleLLMNewToken('Done.', {}, 'm2');
     cb.handleLLMEnd({}, 'm2');
     cb.handleChainEnd({}, 'root');
-    expect(s.seq()).toEqual([
-      'a:start', 'a:tokens', 'a:tool-start:Search', 'a:tool-end', 'a:finish',
-      'a:start', 'a:tokens', 'a:finish',
-    ]);
+    // No 'complete' between the tool and the next model call.
+    expect(s.seq()).toEqual(['a:start', 'a:tokens', 'a:tool-start:Search', 'a:tool-end', 'a:start', 'a:tokens', 'a:finish']);
     expect(s.got[1][1]).toEqual({ type: 'tokens', count: 7 });
   });
 
@@ -74,6 +72,35 @@ describe('createLangChainCallbacks', () => {
     cb.handleToolStart({ name: 'lookup' }, '', 't1', 'root');
     cb.handleChainError(new Error('GraphRecursionError'), 'root'); // the tool never ended
     expect(s.seq()).toEqual(['a:tool-start:lookup', 'a:error', 'a:finish']);
+  });
+
+  it('finishes a router whose tool calls run nowhere, as the next node starts', () => {
+    const s = sink();
+    const cb = createLangChainCallbacks(s, { agentId: (r) => r.name });
+    cb.handleChainStart({}, {}, 'root', undefined);
+    cb.handleChatModelStart(llm, [], 'm1', 'root', {}, [], {}, 'router');
+    cb.handleLLMEnd(withCalls, 'm1'); // structured output / routing decision
+    cb.handleChatModelStart(llm, [], 'm2', 'root', {}, [], {}, 'worker');
+    cb.handleLLMNewToken('x', {}, 'm2');
+    expect(s.seq()).toEqual(['router:start', 'router:finish', 'worker:start', 'worker:tokens']);
+  });
+
+  it('counts a failed invocation against agents that had already finished', () => {
+    const s = sink();
+    const cb = createLangChainCallbacks(s, { agentId: 'a' });
+    cb.handleChainStart({}, {}, 'root', undefined);
+    cb.handleChatModelStart(llm, [], 'm1', 'root');
+    cb.handleLLMEnd({}, 'm1');
+    cb.handleChainError(new Error('GraphRecursionError'), 'root');
+    expect(s.seq()).toEqual(['a:start', 'a:finish', 'a:error', 'a:finish']);
+  });
+
+  it('does not count a stopped (aborted) model call as an error', () => {
+    const s = sink();
+    const cb = createLangChainCallbacks(s, { agentId: 'a' });
+    cb.handleChatModelStart(llm, [], 'm1');
+    cb.handleLLMError(Object.assign(new Error('stop'), { name: 'AbortError' }), 'm1');
+    expect(s.seq()).toEqual(['a:start', 'a:finish']);
   });
 
   it('counts a model error and ends the call', () => {
@@ -153,12 +180,9 @@ describe('createLangChainCallbacks', () => {
     expect(route({})).toBe('main');
   });
 
-  it('a throwing sink does not break the run', () => {
-    vi.useFakeTimers();
+  it('lets a sink error reach LangChain, which catches handler errors', () => {
     const cb = createLangChainCallbacks({ push: () => { throw new Error('sink'); } }, { agentId: 'a' });
-    expect(() => cb.handleChatModelStart(llm, [], 'm1')).not.toThrow();
-    expect(() => vi.runAllTimers()).toThrow('sink');
-    vi.useRealTimers();
+    expect(() => cb.handleChatModelStart(llm, [], 'm1')).toThrow('sink');
   });
 });
 
@@ -197,6 +221,24 @@ describe('createLangChainTap (streamEvents v2)', () => {
     tap({ event: 'on_tool_start', run_id: 't', name: 'x' });
     tap({ event: 'on_chain_end', run_id: 'r2' });
     expect(s.seq().slice(3)).toEqual(['g:start', 'g:error', 'g:finish', 'g:tool-start:x', 'g:finish']);
+  });
+
+  it('reports a sink error instead of throwing it into your loop', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const tap = createLangChainTap({ push: () => { throw new Error('sink'); } }, { agentId: 'g' });
+    expect(() => tap({ event: 'on_chat_model_start', run_id: 'm' })).not.toThrow();
+    expect(err).toHaveBeenCalledWith('[agentstat]', expect.any(Error));
+    err.mockRestore();
+  });
+
+  it('tapLangChainStream: an aborted stream is a stop, not an error', async () => {
+    const s = sink();
+    async function* stopped() {
+      yield { event: 'on_chat_model_start', run_id: 'm1' };
+      throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+    }
+    await expect(tapLangChainStream(s, stopped(), { agentId: 'g' })).rejects.toThrow('aborted');
+    expect(s.seq()).toEqual(['g:start', 'g:finish']);
   });
 
   it('ignores events for runs it never saw start, and malformed events', () => {
