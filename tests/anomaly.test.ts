@@ -72,7 +72,7 @@ describe('detectStall', () => {
 
 describe('detectSpike', () => {
   it('flags a clear outlier above the rolling baseline', () => {
-    const vals = new Array(40).fill(10); // steady ~10/s
+    const vals = new Array(300).fill(10); // steady ~10/s for 30 s
     vals.push(80); // sudden spike
     const tokens = series(vals, 10_000, 100);
     const a = detectSpike(tokens, cfg);
@@ -100,7 +100,7 @@ describe('detectSpike', () => {
   });
 
   it('escalates to critical for an extreme spike', () => {
-    const vals = new Array(40).fill(10);
+    const vals = new Array(300).fill(10);
     vals.push(500);
     const tokens = series(vals, 10_000, 100);
     expect(detectSpike(tokens, cfg)!.severity).toBe('critical');
@@ -154,5 +154,69 @@ describe('detectAnomalies — integration', () => {
     const kinds = out.map((a) => a.kind);
     expect(kinds).toContain('stall');
     expect(kinds).toContain('thrash');
+  });
+});
+
+describe('detectors know what normal looks like', () => {
+  it('allows a thinking agent to be quiet much longer than an active one', () => {
+    const tokens = series(new Array(100).fill(0), 10_000, 100); // 10s idle
+    expect(detectStall(tokens, 'active', 10_000, cfg)?.kind).toBe('stall');
+    expect(detectStall(tokens, 'thinking', 10_000, cfg)).toBeNull();
+    const long = series(new Array(320).fill(0), 40_000, 100); // 32s idle
+    expect(detectStall(long, 'thinking', 40_000, cfg)?.message).toMatch(/while thinking/);
+  });
+
+  it('does not call starting to stream after a pause a spike', () => {
+    const vals = [...new Array(60).fill(0), ...new Array(10).fill(18)];
+    expect(detectSpike(series(vals, 10_000, 100), cfg)).toBeNull();
+  });
+
+  it('judges spikes against a baseline that earlier spikes cannot inflate', () => {
+    // A noisy baseline with a few earlier spikes; a mean/std baseline would
+    // widen enough to miss the new one.
+    const vals = Array.from({ length: 300 }, (_, i) => 10 + (i % 3) + (i % 50 === 0 ? 60 : 0));
+    vals.push(70);
+    const a = detectSpike(series(vals, 40_000, 100), cfg);
+    expect(a?.kind).toBe('spike');
+    expect(a?.message).toMatch(/× recent high ~12\/s/);
+  });
+
+  it('looks at the whole last second, not just the latest sample', () => {
+    const vals = [...new Array(200).fill(10), 80, 10, 10, 10];
+    expect(detectSpike(series(vals, 20_000, 100), cfg)?.value).toBe(80);
+  });
+
+  it('keeps an open spike open on weaker evidence (hysteresis)', () => {
+    // Recent high 12; a peak of 15 (1.25×) is too small to open a spike but
+    // enough to keep an open one open.
+    const vals = [...Array.from({ length: 200 }, (_, i) => 10 + (i % 3)), 15];
+    const tokens = series(vals, 20_000, 100);
+    expect(detectSpike(tokens, cfg, 20_000, false)).toBeNull();
+    expect(detectSpike(tokens, cfg, 20_000, true)).not.toBeNull();
+  });
+
+  it('stays quiet for a bursty but healthy agent', () => {
+    // Chunked output alternating ~2 and ~25 t/s every second.
+    const vals = Array.from({ length: 400 }, (_, i) => (Math.floor(i / 10) % 2 ? 25 + (i % 3) : 2 + (i % 2)));
+    expect(detectSpike(series(vals, 40_000, 100), cfg)).toBeNull();
+  });
+
+  it('waits for enough history before judging spikes', () => {
+    // 5 s of history (< a third of the 30 s baseline window) then a burst.
+    const vals = [...new Array(50).fill(10), 80];
+    expect(detectSpike(series(vals, 10_000, 100), cfg)).toBeNull();
+  });
+
+  it('ignores active↔thinking alternation but counts problem states', () => {
+    const benign: StatusChange[] = [6000, 6500, 7000, 7500, 8000, 8500, 9000].map((t, i) => ({
+      t,
+      status: i % 2 ? 'thinking' : 'active',
+    }));
+    expect(detectThrash(benign, 9000, cfg)).toBeNull();
+    const flapping: StatusChange[] = [6000, 6500, 7000, 7500, 8000, 8500, 9000].map((t, i) => ({
+      t,
+      status: i % 2 ? 'stuck' : 'active',
+    }));
+    expect(detectThrash(flapping, 9000, cfg)?.kind).toBe('thrash');
   });
 });

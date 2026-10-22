@@ -28,6 +28,7 @@ import {
   EPISODE_GRACE_MS,
   HEALTH_WINDOW_MS,
   LATENCY_HISTORY,
+  DETECTOR_HISTORY_MS,
   clamp,
   lerp,
   warnOnce,
@@ -56,6 +57,7 @@ export type RowSnapshot = {
 /** Emitted by a health tick, in order, for the component to act on. */
 export type StoreEvent =
   | { kind: 'anomaly'; id: string; name: string; anomaly: Anomaly }
+  | { kind: 'resolved'; id: string; name: string; anomaly: Anomaly }
   | { kind: 'health'; id: string; health: HealthMetrics };
 
 export interface StoreOptions {
@@ -63,7 +65,7 @@ export interface StoreOptions {
   maxHistoryPoints: number;
 }
 
-type Episode = { severity: AnomalySeverity; lastSeen: number };
+type Episode = { severity: AnomalySeverity; lastSeen: number; last: Anomaly };
 
 const sameRows = (a: RowSnapshot[], b: RowSnapshot[]) =>
   a.length === b.length &&
@@ -186,10 +188,15 @@ export class AgentStore {
 
   // ── Ingest ─────────────────────────────────────────────────────────────
 
-  /** Samples are kept for 1.5× the visible window. */
+  /**
+   * Samples are kept for 1.5× the visible window, and never less than the
+   * history the detectors need — a display option must not change what the
+   * anomaly detectors can see.
+   */
   retentionMs(): number {
     const winS = this.options.windowSeconds;
-    return (winS !== undefined && winS > 0 ? winS * 1000 : DEFAULT_VIEW_MS) * 1.5;
+    const view = (winS !== undefined && winS > 0 ? winS * 1000 : DEFAULT_VIEW_MS) * 1.5;
+    return Math.max(view, DETECTOR_HISTORY_MS);
   }
 
   private _pushSample(rec: AgentRecord, now: number): void {
@@ -309,21 +316,30 @@ export class AgentStore {
         const tokens = tBuf.since(now - this.retentionMs());
         const changes =
           this.status.get(rec.id)?.transitionsInRange(now - cfg.thrashWindowMs, now) ?? [];
-        found = detectAnomalies(tokens, changes, rec.current.status, now, cfg);
+        const eps = this._episodes.get(rec.id) ?? new Map<AnomalyKind, Episode>();
+        // Open episodes are passed in so detectors can apply hysteresis.
+        found = detectAnomalies(tokens, changes, rec.current.status, now, cfg, new Set(eps.keys()));
         const prev = this.anomalies.get(rec.id) ?? [];
         if (found.length || prev.length) this.dirty = true;
         this.anomalies.set(rec.id, found);
 
-        // Once per episode (and on escalation), not once per tick.
-        const eps = this._episodes.get(rec.id) ?? new Map<AnomalyKind, Episode>();
+        // Report once when an episode opens (and on escalation), not on every
+        // tick, and once when it ends.
         for (const a of found) {
           const open = eps.get(a.kind);
           const escalated = open?.severity === 'warning' && a.severity === 'critical';
           if (!open || escalated) emit({ kind: 'anomaly', id: rec.id, name: rec.name, anomaly: a });
-          eps.set(a.kind, { severity: a.severity, lastSeen: now });
+          eps.set(a.kind, {
+            severity: open && !escalated ? open.severity : a.severity,
+            lastSeen: now,
+            last: a,
+          });
         }
         for (const [kind, ep] of Array.from(eps)) {
-          if (now - ep.lastSeen > EPISODE_GRACE_MS) eps.delete(kind);
+          if (now - ep.lastSeen > EPISODE_GRACE_MS) {
+            eps.delete(kind);
+            emit({ kind: 'resolved', id: rec.id, name: rec.name, anomaly: ep.last });
+          }
         }
         this._episodes.set(rec.id, eps);
       } else if (this.anomalies.has(rec.id)) {

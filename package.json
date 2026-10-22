@@ -42,7 +42,8 @@
     "check": "npm run typecheck && npm run lint && npm test && npm run build && npm run check:size && npm run test:dist",
     "prepublishOnly": "npm run check",
     "screenshots": "node scripts/screenshots.mjs",
-    "test:dist": "vitest run --config vitest.dist.config.ts"
+    "test:dist": "vitest run --config vitest.dist.config.ts",
+    "eval:detectors": "node scripts/eval-detectors.mjs"
   },
   "peerDependencies": {
     "react": ">=18",

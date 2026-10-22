@@ -11,6 +11,9 @@ export const DEFAULT_VIEW_MS = 10_000;
 // the edge — a quiet agent's line ends where its data ends.
 export const STALE_MS = 2_500;
 export const HEALTH_TICK_MS = 500;
+// History kept for the anomaly detectors regardless of the visible window:
+// covers the default 30 s spike baseline plus the recent second and margin.
+export const DETECTOR_HISTORY_MS = 40_000;
 export const HEALTH_WINDOW_MS = 5_000;
 export const LATENCY_HISTORY = 20;
 export const DEFAULT_CAP = 100_000;

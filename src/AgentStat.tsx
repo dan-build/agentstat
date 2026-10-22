@@ -134,6 +134,11 @@ export interface AgentStatProps {
    * warning to critical) — not on every detection tick.
    */
   onAnomaly?: (agentId: string, anomaly: Anomaly) => void;
+  /**
+   * Called once when an anomaly that was reported has cleared (2 s after the
+   * detector last saw it), with the last reading of it.
+   */
+  onAnomalyEnd?: (agentId: string, anomaly: Anomaly) => void;
 }
 
 export interface AgentStatRef {
@@ -239,6 +244,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
     anomalyDetection = false,
     anomalyConfig,
     onAnomaly,
+    onAnomalyEnd,
   }: AgentStatProps,
   ref: React.ForwardedRef<AgentStatRef>
 ) {
@@ -288,6 +294,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
     anomalyDetection,
     anomalyConfig: { ...DEFAULT_ANOMALY_CONFIG, ...anomalyConfig } as AnomalyConfig,
     onAnomaly,
+    onAnomalyEnd,
     onHealthChange,
     onPointClick: onPointClick ?? onSpikeClick,
   });
@@ -302,6 +309,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
       anomalyDetection,
       anomalyConfig: { ...DEFAULT_ANOMALY_CONFIG, ...anomalyConfig },
       onAnomaly,
+      onAnomalyEnd,
       onHealthChange,
       onPointClick: onPointClick ?? onSpikeClick,
     };
@@ -443,6 +451,9 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
           const text = `${ev.name}: ${ev.anomaly.message}.`;
           if (ev.anomaly.severity === 'critical') setAlertText(text);
           else setAnnouncement(text);
+        } else if (ev.kind === 'resolved') {
+          L.onAnomalyEnd?.(ev.id, { ...ev.anomaly });
+          setAnnouncement(`${ev.name}: ${ev.anomaly.kind} resolved.`);
         } else {
           L.onHealthChange?.(ev.id, { ...ev.health });
         }
