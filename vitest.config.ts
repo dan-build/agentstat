@@ -7,6 +7,8 @@ export default defineConfig({
     environment: 'happy-dom',
     globals: true,
     include: ['tests/**/*.test.{ts,tsx}'],
+    // Runs against the build; see vitest.dist.config.ts (`npm run test:dist`).
+    exclude: ['tests/dist-smoke.test.tsx', 'node_modules/**'],
     setupFiles: ['tests/setup.ts'],
   },
 });

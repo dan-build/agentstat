@@ -2,6 +2,31 @@
 
 All notable changes to AgentStat are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [SemVer](https://semver.org/).
 
+## [0.5.0] — Unreleased
+
+### Changed
+
+- **Internal architecture.** The 2,100-line component is split into a
+  framework-free store (`src/core/store.ts`), a canvas renderer
+  (`src/core/draw.ts`), shared view geometry, and small UI components
+  (`src/ui/`). Canvas output is unchanged, verified call-for-call by renderer
+  snapshot tests. The public API and types are unchanged.
+- **Overlay rows (legend, panel) re-render synchronously** via
+  `useSyncExternalStore` when the store publishes, so the panel can be one
+  health tick fresher than before.
+- **`onAnomaly` / `onHealthChange` fire after each agent's state is updated.**
+  A callback that throws no longer stops other agents' state from updating
+  during that tick.
+
+### Fixed
+
+- **The screen-reader summary** is present in the first render and in
+  server-rendered markup.
+- **First-render rows are validated** like later updates: duplicate ids are
+  dropped, and invalid values are normalized.
+- **Removing the inspected agent** clears the tooltip; Enter no longer fires
+  `onPointClick` for an agent that's gone.
+
 ## [0.4.1] — 2026-10-21
 
 An interface review under worst-case conditions: many agents, very long names,

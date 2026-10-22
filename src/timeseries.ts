@@ -60,36 +60,36 @@ export function nearestValueAt(arr: TSPoint[], t: number): number | undefined {
 export class TimeSeriesBuffer {
   // Plain array with head-trim eviction. A start index avoids O(n) shifts on
   // every append; compaction happens lazily once the dead head dominates.
-  private buf: TSPoint[] = [];
-  private start = 0;
-  private readonly hardCap: number;
+  private _buf: TSPoint[] = [];
+  private _start = 0;
+  private readonly _hardCap: number;
 
   // Downsample cache — keyed on the inputs that affect the result.
-  private cacheKey = '';
-  private cacheVal: DownsampleResult | null = null;
+  private _cacheKey = '';
+  private _cacheVal: DownsampleResult | null = null;
 
   constructor(hardCap: number = DEFAULT_CAP) {
-    this.hardCap = Math.max(2, hardCap);
+    this._hardCap = Math.max(2, hardCap);
   }
 
   /** Number of live samples (excludes trimmed head). */
   get length(): number {
-    return this.buf.length - this.start;
+    return this._buf.length - this._start;
   }
 
   /** Timestamp of the most recent sample, or -Infinity if empty. */
   get lastT(): number {
-    return this.length > 0 ? this.buf[this.buf.length - 1].t : -Infinity;
+    return this.length > 0 ? this._buf[this._buf.length - 1].t : -Infinity;
   }
 
   /** Timestamp of the oldest live sample, or +Infinity if empty. */
   get firstT(): number {
-    return this.length > 0 ? this.buf[this.start].t : Infinity;
+    return this.length > 0 ? this._buf[this._start].t : Infinity;
   }
 
   /** The most recent sample, or undefined if empty. */
   last(): TSPoint | undefined {
-    return this.length > 0 ? this.buf[this.buf.length - 1] : undefined;
+    return this.length > 0 ? this._buf[this._buf.length - 1] : undefined;
   }
 
   /**
@@ -100,38 +100,38 @@ export class TimeSeriesBuffer {
   push(t: number, v: number): void {
     if (!Number.isFinite(t) || !Number.isFinite(v)) return;
     const lastT = this.lastT;
-    this.buf.push({ t: t < lastT ? lastT : t, v });
+    this._buf.push({ t: t < lastT ? lastT : t, v });
     // Hard cap by count to bound memory even if eviction-by-time isn't called.
-    if (this.buf.length - this.start > this.hardCap) {
-      this.start = this.buf.length - this.hardCap;
+    if (this._buf.length - this._start > this._hardCap) {
+      this._start = this._buf.length - this._hardCap;
     }
-    this.maybeCompact();
+    this._maybeCompact();
   }
 
   /** Drop samples older than (now - retentionMs). */
   evictOlderThan(now: number, retentionMs: number): void {
-    const s = this.lowerBound(now - retentionMs);
-    if (s > this.start) this.start = s;
-    this.maybeCompact();
+    const s = this._lowerBound(now - retentionMs);
+    if (s > this._start) this._start = s;
+    this._maybeCompact();
   }
 
   // Reclaim the dead head once it outweighs the live samples. Compaction
   // shifts indices, so it must drop the cache (exact keys embed indices).
-  private maybeCompact(): void {
-    if (this.start > 1024 && this.start >= this.buf.length - this.start) {
-      this.buf = this.buf.slice(this.start);
-      this.start = 0;
-      this.cacheVal = null;
+  private _maybeCompact(): void {
+    if (this._start > 1024 && this._start >= this._buf.length - this._start) {
+      this._buf = this._buf.slice(this._start);
+      this._start = 0;
+      this._cacheVal = null;
     }
   }
 
   // First live index whose timestamp is >= t (buf.length if none). O(log n).
-  private lowerBound(t: number): number {
-    let lo = this.start;
-    let hi = this.buf.length;
+  private _lowerBound(t: number): number {
+    let lo = this._start;
+    let hi = this._buf.length;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (this.buf[mid].t < t) lo = mid + 1;
+      if (this._buf[mid].t < t) lo = mid + 1;
       else hi = mid;
     }
     return lo;
@@ -143,19 +143,19 @@ export class TimeSeriesBuffer {
    * copying the whole buffer.
    */
   since(t: number): TSPoint[] {
-    return this.buf.slice(this.lowerBound(t));
+    return this._buf.slice(this._lowerBound(t));
   }
 
   /** Values of live samples with timestamp >= t. */
   valuesSince(t: number): number[] {
     const out: number[] = [];
-    for (let i = this.lowerBound(t); i < this.buf.length; i++) out.push(this.buf[i].v);
+    for (let i = this._lowerBound(t); i < this._buf.length; i++) out.push(this._buf[i].v);
     return out;
   }
 
   /** All live samples (no copy of individual points; slices the live window). */
   toArray(): TSPoint[] {
-    return this.buf.slice(this.start);
+    return this._buf.slice(this._start);
   }
 
   /**
@@ -166,27 +166,27 @@ export class TimeSeriesBuffer {
    * buffers.
    */
   nearestValueAt(t: number): number | undefined {
-    const lo0 = this.start;
-    const hi0 = this.buf.length - 1;
+    const lo0 = this._start;
+    const hi0 = this._buf.length - 1;
     if (hi0 < lo0) return undefined;
-    if (t <= this.buf[lo0].t) return this.buf[lo0].v;
-    if (t >= this.buf[hi0].t) return this.buf[hi0].v;
+    if (t <= this._buf[lo0].t) return this._buf[lo0].v;
+    if (t >= this._buf[hi0].t) return this._buf[hi0].v;
     let lo = lo0;
     let hi = hi0;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (this.buf[mid].t < t) lo = mid + 1;
+      if (this._buf[mid].t < t) lo = mid + 1;
       else hi = mid;
     }
-    const hiPt = this.buf[lo];
-    const loPt = this.buf[lo - 1];
+    const hiPt = this._buf[lo];
+    const loPt = this._buf[lo - 1];
     return Math.abs(hiPt.t - t) < Math.abs(t - loPt.t) ? hiPt.v : loPt.v;
   }
 
   /** Raw values only (for code paths that just need numbers, e.g. health). */
   values(): number[] {
     const out: number[] = [];
-    for (let i = this.start; i < this.buf.length; i++) out.push(this.buf[i].v);
+    for (let i = this._start; i < this._buf.length; i++) out.push(this._buf[i].v);
     return out;
   }
 
@@ -214,8 +214,8 @@ export class TimeSeriesBuffer {
     // which samples are in view. Without the cutoff in the key, a quiet agent
     // kept serving points that had already scrolled out of the window.
     const lo =
-      windowMs !== undefined ? this.lowerBound(now - windowMs) : this.start;
-    const sliceLen = this.buf.length - lo;
+      windowMs !== undefined ? this._lowerBound(now - windowMs) : this._start;
+    const sliceLen = this._buf.length - lo;
     const willDownsample = sliceLen > targetPoints && targetPoints >= 3;
 
     // Downsampled path: quantize on wall time so LTTB reruns at most once per
@@ -225,10 +225,10 @@ export class TimeSeriesBuffer {
     const key =
       willDownsample && recomputeMs > 0
         ? `d:${windowMs ?? 'all'}:${targetPoints}:${Math.floor(now / recomputeMs)}`
-        : `e:${windowMs ?? 'all'}:${targetPoints}:${lo}:${this.buf.length}`;
-    if (this.cacheVal && this.cacheKey === key) return this.cacheVal;
+        : `e:${windowMs ?? 'all'}:${targetPoints}:${lo}:${this._buf.length}`;
+    if (this._cacheVal && this._cacheKey === key) return this._cacheVal;
 
-    const slice = this.buf.slice(lo);
+    const slice = this._buf.slice(lo);
 
     let result: DownsampleResult;
     if (slice.length <= targetPoints || targetPoints < 3) {
@@ -237,8 +237,8 @@ export class TimeSeriesBuffer {
       result = { points: lttb(slice, targetPoints), downsampled: true };
     }
 
-    this.cacheKey = key;
-    this.cacheVal = result;
+    this._cacheKey = key;
+    this._cacheVal = result;
     return result;
   }
 }

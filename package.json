@@ -39,9 +39,10 @@
     "test:coverage": "vitest run --coverage",
     "check:size": "node scripts/check-size.mjs",
     "check:package": "publint --strict && attw --pack . --profile node16",
-    "check": "npm run typecheck && npm run lint && npm test && npm run build && npm run check:size",
+    "check": "npm run typecheck && npm run lint && npm test && npm run build && npm run check:size && npm run test:dist",
     "prepublishOnly": "npm run check",
-    "screenshots": "node scripts/screenshots.mjs"
+    "screenshots": "node scripts/screenshots.mjs",
+    "test:dist": "vitest run --config vitest.dist.config.ts"
   },
   "peerDependencies": {
     "react": ">=18",

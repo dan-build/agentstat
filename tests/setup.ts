@@ -1,10 +1,9 @@
 // tests/setup.ts
 //
-// happy-dom returns null from HTMLCanvasElement.getContext('2d'), which means
-// AgentStat's animate() loop bails out before populating liveValuesRef.
-// This file stubs out a no-op 2D context so animate() runs to completion in
-// tests — no pixels get drawn (nobody's looking), but every side-effect in
-// the loop (refs, lerps, status copies) works correctly.
+// happy-dom returns null from HTMLCanvasElement.getContext('2d'), which would
+// make AgentStat's render loop bail out before easing live values. This file
+// stubs a no-op 2D context so each frame runs to completion in tests — no
+// pixels are drawn, but every side effect of the loop works.
 
 import { beforeAll } from 'vitest';
 
