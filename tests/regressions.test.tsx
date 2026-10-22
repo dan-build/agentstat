@@ -32,13 +32,31 @@ describe('time-series buffer', () => {
   });
 
   it('keeps the downsample cache across pushes within a recompute bucket', () => {
-    const buf = new TimeSeriesBuffer(500);
+    // Phase 0: buckets are [2000, 3000), [3000, 4000), …
+    const buf = new TimeSeriesBuffer(500, 0);
     for (let i = 0; i < 2000; i++) buf.push(i, i % 7);
     const a = buf.windowed(2000, undefined, 50, 1000);
     expect(a.downsampled).toBe(true);
     buf.push(2000, 3); // hard cap slides the head
-    const b = buf.windowed(2000, undefined, 50, 1000);
+    const b = buf.windowed(2999, undefined, 50, 1000); // same bucket, later now
     expect(b).toBe(a);
+    const c = buf.windowed(3000, undefined, 50, 1000); // next bucket
+    expect(c).not.toBe(a);
+  });
+
+  it('keeps a paused view stable while data keeps arriving', () => {
+    const buf = new TimeSeriesBuffer();
+    for (let i = 0; i < 1000; i++) buf.push(i * 10, i % 5);
+    const frozen = buf.windowed(5000, 2000, 100).points;
+    for (let i = 1000; i < 3000; i++) buf.push(i * 10, 99);
+    expect(buf.windowed(5000, 2000, 100).points).toEqual(frozen);
+    expect(frozen.every((p) => p.t <= 5000)).toBe(true);
+  });
+
+  it('enforces a fractional hard cap', () => {
+    const buf = new TimeSeriesBuffer(2.5);
+    for (let i = 0; i < 10; i++) buf.push(i, i);
+    expect(buf.length).toBe(2);
   });
 
   it('rejects non-finite samples and keeps time sorted', () => {

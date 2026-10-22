@@ -10,10 +10,11 @@
 //   - Time-based eviction: drop samples older than a retention horizon.
 //   - Window slicing: return only samples within the last `windowMs`.
 //   - Downsampling: when a sliced window has far more points than the canvas
-//     can show, reduce it per time column to first/min/max/last (M4), which is
-//     pixel-faithful: no spike or dip can disappear. Results are cached on the
-//     slice bounds (or a wall-time bucket when downsampling) so a static view
-//     costs nothing per frame.
+//     can show, reduce it per time column to first/min/max/last (M4). Every
+//     column keeps its highest and lowest sample, so the slice's extremes and
+//     any isolated spike or dip always survive (two spikes within one column
+//     show as one). Results are cached on the slice bounds (or a wall-time
+//     bucket when downsampling) so a static view costs nothing per frame.
 
 export interface TSPoint {
   /** Timestamp in ms (performance.now() domain or Date.now() — caller's choice, must be consistent). */
@@ -94,10 +95,16 @@ export class TimeSeriesBuffer {
   private _ckA = 0;
   private _ckB = 0;
   private _cacheVal: DownsampleResult | null = null;
-  private readonly _phase = nextPhase();
+  private readonly _phase: number;
 
-  constructor(hardCap: number = DEFAULT_CAP) {
-    this._hardCap = Math.max(2, hardCap);
+  /**
+   * @param hardCap  maximum samples kept (memory bound; retention is time-based)
+   * @param phase    fraction of a recompute bucket this buffer is offset by;
+   *                 defaults to a spread sequence (fixed values are for tests)
+   */
+  constructor(hardCap: number = DEFAULT_CAP, phase: number = nextPhase()) {
+    this._hardCap = Math.max(2, Math.floor(hardCap) || 2);
+    this._phase = phase;
     const cap = Math.min(MIN_CAPACITY, pow2AtLeast(this._hardCap));
     this._t = new Float64Array(cap);
     this._v = new Float64Array(cap);
@@ -127,7 +134,7 @@ export class TimeSeriesBuffer {
   push(t: number, v: number): void {
     if (!Number.isFinite(t) || !Number.isFinite(v)) return;
     const lastT = this.lastT;
-    if (this._n === this._hardCap) {
+    if (this._n >= this._hardCap) {
       // Full: overwrite the oldest sample.
       this._head = (this._head + 1) & this._mask;
       this._n--;
@@ -193,10 +200,10 @@ export class TimeSeriesBuffer {
 
   /**
    * Samples within the last `windowMs` (relative to `now`; all samples when
-   * undefined). Slices longer than about `2 × targetPoints` are downsampled
-   * to `targetPoints / 2` time columns, keeping each column's first, last,
-   * minimum and maximum sample (M4): typically about `targetPoints` points,
-   * never more than the input, and peaks and dips are never lost.
+   * undefined) and not after `now`. Slices longer than `targetPoints` are
+   * downsampled to `targetPoints / 4` time columns, keeping each column's
+   * first, last, minimum and maximum sample (M4): at most `targetPoints`
+   * points, with every column's extremes kept.
    *
    * Cached. Exact results are keyed on the slice bounds, so every new or
    * expired sample shows immediately. Downsampled results are keyed on a
@@ -211,11 +218,14 @@ export class TimeSeriesBuffer {
     recomputeMs = 0
   ): DownsampleResult {
     const lo = windowMs !== undefined ? this._lowerBound(now - windowMs) : 0;
-    const sliceLen = this._n - lo;
-    // M4 returns at most 4 samples per column, so only downsample when that
-    // is a real reduction; smaller slices are returned as-is.
-    const columns = Math.max(1, Math.ceil(targetPoints / 2));
-    const downsample = targetPoints >= 3 && sliceLen > columns * 4;
+    // Never past `now`: a paused view keeps its slice while data keeps arriving.
+    const hi = this._upperBound(now);
+    const sliceLen = Math.max(0, hi - lo);
+    // M4 returns at most 4 samples per column, so `targetPoints / 4` columns
+    // keep the output within `targetPoints`. Downsample only slices longer
+    // than both the target and that maximum, so the result is always smaller.
+    const columns = Math.max(1, Math.floor(targetPoints / 4));
+    const downsample = targetPoints >= 3 && sliceLen > Math.max(targetPoints, columns * 4);
     const win = windowMs ?? -1;
     let mode: number;
     let a: number;
@@ -223,11 +233,11 @@ export class TimeSeriesBuffer {
     if (downsample && recomputeMs > 0) {
       mode = 2;
       a = Math.floor(now / recomputeMs + this._phase);
-      b = 0;
+      b = recomputeMs;
     } else {
       mode = 1;
       a = this._base + lo;
-      b = this._base + this._n;
+      b = this._base + hi;
     }
     if (
       this._cacheVal &&
@@ -240,8 +250,8 @@ export class TimeSeriesBuffer {
       return this._cacheVal;
     }
     const result: DownsampleResult = downsample
-      ? { points: this._m4(lo, this._n, columns), downsampled: true }
-      : { points: this._points(lo, this._n), downsampled: false };
+      ? { points: this._m4(lo, hi, columns), downsampled: true }
+      : { points: this._points(lo, hi), downsampled: false };
     this._ckMode = mode;
     this._ckWindow = win;
     this._ckTarget = targetPoints;
@@ -271,6 +281,18 @@ export class TimeSeriesBuffer {
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
       if (this._t[(this._head + mid) & this._mask] < t) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
+  // First logical index whose timestamp is > t (length if none). O(log n).
+  private _upperBound(t: number): number {
+    let lo = 0;
+    let hi = this._n;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (this._t[(this._head + mid) & this._mask] <= t) lo = mid + 1;
       else hi = mid;
     }
     return lo;
@@ -327,7 +349,8 @@ export class TimeSeriesBuffer {
       if (t >= colEnd && col < columns - 1) {
         emit(first, Math.min(min, max), Math.max(min, max), last);
         // Skip empty columns.
-        col = Math.min(columns - 1, Math.floor((t - t0) / colSpan));
+        // Always advance: float error can map t >= colEnd back to `col`.
+        col = Math.max(col + 1, Math.min(columns - 1, Math.floor((t - t0) / colSpan)));
         colEnd = col === columns - 1 ? Infinity : t0 + (col + 1) * colSpan;
         first = last = min = max = i;
         minV = maxV = v;

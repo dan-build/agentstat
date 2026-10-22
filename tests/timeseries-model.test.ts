@@ -23,11 +23,11 @@ import {
 
 /**
  * Maximum number of points windowed() may return for a slice longer than
- * `targetPoints`, downsampled or not. M4 over `targetPoints / 2` columns
- * returns at most 4 per column (first/min/max/last), and slices too short to
- * reduce are returned as-is, so the bound is about 2× `targetPoints`.
+ * `targetPoints`, downsampled or not: M4 over `targetPoints / 4` columns
+ * returns at most 4 per column (first/min/max/last), and slices that wouldn't
+ * shrink are returned as-is.
  */
-const MAX_DOWNSAMPLED_POINTS = (targetPoints: number): number => 4 * Math.ceil(targetPoints / 2);
+const MAX_DOWNSAMPLED_POINTS = (targetPoints: number): number => Math.max(targetPoints, 4);
 
 const SCENARIOS = 300;
 const MIN_OPS = 200;
@@ -142,8 +142,10 @@ class ModelBuffer {
   }
 
   /** Samples visible in windowed(now, windowMs, ...), before downsampling. */
+  // In window and not after `now` (a paused view must not grow).
   windowSlice(now: number, windowMs: number | undefined): TSPoint[] {
-    return windowMs === undefined ? this.toArray() : this.since(now - windowMs);
+    const from = windowMs === undefined ? this.toArray() : this.since(now - windowMs);
+    return from.filter((p) => p.t <= now);
   }
 }
 
@@ -482,7 +484,7 @@ describe('TimeSeriesBuffer.windowed — exact path', () => {
       const all = b.toArray();
       const now = (all.length ? all[all.length - 1].t : 0) + rng.int(0, 20);
       for (const windowMs of [undefined, 0, 1, 50, 200, 1e9]) {
-        const slice = windowMs === undefined ? all : all.filter((p) => p.t >= now - windowMs);
+        const slice = all.filter((p) => (windowMs === undefined || p.t >= now - windowMs) && p.t <= now);
         for (const targetPoints of [0, 1, 2, slice.length, slice.length + 1, 1e6]) {
           if (!(slice.length <= targetPoints || targetPoints < 3)) continue;
           const res = b.windowed(now, windowMs, targetPoints);
@@ -525,7 +527,7 @@ describe('TimeSeriesBuffer.windowed — downsampled path', () => {
       const all = b.toArray();
       const now = all[all.length - 1].t;
       for (const windowMs of [undefined, 500, 2000]) {
-        const slice = windowMs === undefined ? all : all.filter((p) => p.t >= now - windowMs);
+        const slice = all.filter((p) => (windowMs === undefined || p.t >= now - windowMs) && p.t <= now);
         if (slice.length <= c.tp) continue;
         const res = b.windowed(now, windowMs, c.tp);
         const err = checkDownsampleProps(slice, res, c.tp);
@@ -545,7 +547,7 @@ describe('TimeSeriesBuffer.windowed — downsampled path', () => {
       const all = b.toArray();
       const now = all[all.length - 1].t;
       for (const windowMs of [undefined, 500, 2000]) {
-        const slice = windowMs === undefined ? all : all.filter((p) => p.t >= now - windowMs);
+        const slice = all.filter((p) => (windowMs === undefined || p.t >= now - windowMs) && p.t <= now);
         if (slice.length <= c.tp) continue;
         const res = b.windowed(now, windowMs, c.tp);
         const err = extremesPresent(slice, res.points);
@@ -574,7 +576,7 @@ describe('TimeSeriesBuffer.windowed — downsampled path', () => {
 describe('TimeSeriesBuffer.windowed — cache correctness (recomputeMs = 0)', () => {
   function checkFresh(b: TimeSeriesBuffer, now: number, windowMs: number | undefined, tp: number) {
     const all = b.toArray();
-    const slice = windowMs === undefined ? all : all.filter((p) => p.t >= now - windowMs);
+    const slice = all.filter((p) => (windowMs === undefined || p.t >= now - windowMs) && p.t <= now);
     const r1 = b.windowed(now, windowMs, tp);
     const r2 = b.windowed(now, windowMs, tp);
     expect(r2).toEqual(r1);
@@ -591,22 +593,22 @@ describe('TimeSeriesBuffer.windowed — cache correctness (recomputeMs = 0)', ()
     it(`reflects pushes, evictions and window moves immediately (${label})`, () => {
       const b = new TimeSeriesBuffer();
       for (let i = 0; i < 200; i++) b.push(i * 10, i % 17);
-      let r = checkFresh(b, 1990, 500, tp);
+      let r = checkFresh(b, 2000, 500, tp);
       const before = r.points[r.points.length - 1];
 
       b.push(2000, 99);
-      r = checkFresh(b, 1990, 500, tp);
+      r = checkFresh(b, 2000, 500, tp);
       expect(r.points[r.points.length - 1]).toEqual({ t: 2000, v: 99 });
       expect(r.points[r.points.length - 1]).not.toEqual(before);
 
       // Same now, but eviction removes in-window samples.
       b.evictOlderThan(2000, 200);
-      r = checkFresh(b, 1990, 500, tp);
+      r = checkFresh(b, 2000, 500, tp);
       expect(r.points[0].t).toBe(1800);
 
       // Eviction that touches nothing in the window.
       b.evictOlderThan(2000, 1e6);
-      checkFresh(b, 1990, 500, tp);
+      checkFresh(b, 2000, 500, tp);
 
       // Moving `now` slides the window with no data change.
       r = checkFresh(b, 2090, 100, tp);
