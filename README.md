@@ -88,6 +88,44 @@ chart's stream data over — the agents it added, and everything recorded for
 `agents`-prop agents it fed, including what you sent them through the ref — and
 replays the new one's history.
 
+### From a server
+
+When the agents run on a server (a route handler, a worker), stream their
+events to the browser over Server-Sent Events with
+`@dan-build/agentstat/sse`:
+
+```ts
+// server — e.g. app/api/agents/route.ts (any Fetch-API runtime)
+import { createAgentStream, createSseHandler } from '@dan-build/agentstat/sse';
+
+export const stream = createAgentStream(); // feed it with the adapters below
+export const GET = createSseHandler(stream);
+```
+
+```tsx
+// browser
+import { connectSse } from '@dan-build/agentstat/sse';
+
+const source = useMemo(() => connectSse('/api/agents'), []);
+<AgentStat source={source} metric="tokens" anomalyDetection />
+```
+
+Import server code from `@dan-build/agentstat/sse` (or the adapter entries):
+the main entry is client-only. A chart that connects gets the stream's last
+5 minutes, then live events. Charts using the same `connectSse` source share
+one connection. After a drop or an error response (a proxy during a deploy)
+it reconnects with backoff and resumes where it stopped — as far back as the
+stream keeps. Event times don't depend on the two machines' clocks agreeing.
+
+The endpoint exposes your agents' telemetry, so protect it like any route:
+`createSseHandler(request => …)` can pick a stream per request (return
+`undefined` for a 404) — return the same stream object for the same agents
+each time. The stream lives in the server process: several replicas or
+serverless instances each have their own. A client that stops reading is
+disconnected (it reconnects and resumes) rather than buffered; so is one
+that falls behind a burst of more than `maxQueued` (1 000) messages, which
+costs a couple of seconds' pause, not data.
+
 ### Stream events
 
 `push` takes raw events, and AgentStat derives the token rate, time to first

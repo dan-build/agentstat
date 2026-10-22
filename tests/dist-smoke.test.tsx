@@ -61,9 +61,36 @@ describe.skipIf(!pkg)('built package', () => {
 const AI_SDK = '../dist/ai-sdk.js';
 const AG_UI = '../dist/ag-ui.js';
 const LANGCHAIN = '../dist/langchain.js';
+const SSE = '../dist/sse.js';
 const aiSdk: typeof import('../src/ai-sdk') | null = await import(/* @vite-ignore */ AI_SDK).catch(() => null);
 const agUi: typeof import('../src/ag-ui') | null = await import(/* @vite-ignore */ AG_UI).catch(() => null);
 const langchain: typeof import('../src/langchain') | null = await import(/* @vite-ignore */ LANGCHAIN).catch(() => null);
+const sse: typeof import('../src/sse') | null = await import(/* @vite-ignore */ SSE).catch(() => null);
+
+describe.skipIf(!sse)('built SSE transport', () => {
+  it('serves a stream as server-sent events', async () => {
+    const stream = sse!.createAgentStream();
+    stream.push('a', { type: 'start' });
+    const res = await sse!.createSseHandler(stream)(new Request('http://x/'));
+    const reader = res.body!.getReader();
+    let text = '';
+    while (!text.includes('data: ')) text += new TextDecoder().decode((await reader.read()).value);
+    expect(res.headers.get('content-type')).toMatch(/event-stream/);
+    expect(text).toMatch(/id: \w+:1\ndata: \{"m":/);
+    await reader.cancel();
+  });
+
+  it('runs on a server: createAgentStream from /sse, no React import', async () => {
+    const FS = 'node:fs'; // no Node types in the test typecheck
+    const { readFileSync } = (await import(/* @vite-ignore */ FS)) as { readFileSync(p: string, e: string): string };
+    expect(readFileSync('dist/sse.js', 'utf8')).not.toMatch(/from ['"]react['"]/);
+    const stream = sse!.createAgentStream();
+    stream.push('a', { type: 'start' });
+    const res = await sse!.createSseHandler(stream)(new Request('http://x/'));
+    expect(res.status).toBe(200);
+    await res.body!.cancel();
+  });
+});
 
 describe.skipIf(!aiSdk || !agUi || !langchain)('built adapters', () => {
   it('map parts and events', () => {

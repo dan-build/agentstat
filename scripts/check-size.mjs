@@ -52,8 +52,9 @@ for (const [file, budget] of Object.entries(BUDGETS)) {
 // Adapters: small, and free of the client directive so they run on servers.
 // langchain 1.5 → 2.2 KB: per-agent run counting, per-invocation roots and
 // handover (concurrent runs, supervisors, parallel agents, failed and stopped
-// runs end correctly — verified live against LangGraph).
-const ADAPTER_BUDGETS = { 'dist/ai-sdk.js': 2_000, 'dist/ag-ui.js': 2_000, 'dist/langchain.js': 2_200 };
+// runs end correctly — verified live against LangGraph). sse 2.5 KB: it
+// carries the stream core (createAgentStream for server code).
+const ADAPTER_BUDGETS = { 'dist/ai-sdk.js': 2_000, 'dist/ag-ui.js': 2_000, 'dist/langchain.js': 2_200, 'dist/sse.js': 2_500 };
 for (const [file, ADAPTER_BUDGET] of Object.entries(ADAPTER_BUDGETS)) {
   const out = await build({ entryPoints: [file], bundle: true, minify: true, write: false, format: 'esm', logLevel: 'silent' });
   const gz = gzipSync(out.outputFiles[0].contents).length;
@@ -76,7 +77,7 @@ report(shaken <= TREESHAKE_BUDGET, `tree-shaken detectAnomalies import: ${shaken
 
 // Internal members are renamed at build time (mangleProps /^_/). A public
 // name starting with "_" would be renamed in the code but not in the types.
-const dts = ['dist/index.d.ts', 'dist/ai-sdk.d.ts', 'dist/ag-ui.d.ts', 'dist/langchain.d.ts'].map((f) => readFileSync(f, 'utf8')).join('\n');
+const dts = ['dist/index.d.ts', 'dist/ai-sdk.d.ts', 'dist/ag-ui.d.ts', 'dist/langchain.d.ts', 'dist/sse.d.ts'].map((f) => readFileSync(f, 'utf8')).join('\n');
 const underscored = dts.match(/\b_[A-Za-z]\w*/g) ?? [];
 report(underscored.length === 0, `dist/*.d.ts expose no _-prefixed names${underscored.length ? `: ${[...new Set(underscored)].join(', ')}` : ''}`);
 

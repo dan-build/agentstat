@@ -49,6 +49,16 @@
         "default": "./dist/langchain.cjs"
       }
     },
+    "./sse": {
+      "import": {
+        "types": "./dist/sse.d.ts",
+        "default": "./dist/sse.js"
+      },
+      "require": {
+        "types": "./dist/sse.d.cts",
+        "default": "./dist/sse.cjs"
+      }
+    },
     "./package.json": "./package.json"
   },
   "typesVersions": {
@@ -61,6 +71,9 @@
       ],
       "langchain": [
         "./dist/langchain.d.ts"
+      ],
+      "sse": [
+        "./dist/sse.d.ts"
       ]
     }
   },

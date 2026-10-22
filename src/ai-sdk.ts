@@ -6,6 +6,8 @@
 
 import type { AgentEvent } from './types';
 
+export type { AgentEvent };
+
 /** Where events go: an `AgentStream` (or anything with its `push`). */
 export interface EventSink {
   push(agentId: string, event: AgentEvent): void;
