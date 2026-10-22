@@ -124,6 +124,27 @@ describe('createSseHandler', () => {
   });
 });
 
+describe('createSseHandler back-pressure after the history is read', () => {
+  it('drops a client that read the history and then stalled', async () => {
+    const s = createAgentStream();
+    for (let i = 0; i < 2_000; i++) s.push('a', { type: 'tokens', count: 1 });
+    const res = await createSseHandler(s, { maxQueued: 50 })(new Request('http://x/'));
+    const reader = res.body!.getReader();
+    for (let n = 0; n < 2_001; n++) await reader.read(); // retry line + the history
+    for (let i = 0; i < 49; i++) s.push('a', { type: 'tokens', count: 1 }); // within the allowance
+    for (let i = 0; i < 10; i++) s.push('a', { type: 'tokens', count: 1 }); // now stalled past it
+    let frames = 0;
+    let done = false;
+    for (let n = 0; n < 200 && !done; n++) {
+      const r = await reader.read();
+      done = r.done;
+      if (!r.done) frames++;
+    }
+    expect(done).toBe(true);
+    expect(frames).toBeLessThan(60);
+  });
+});
+
 describe('connectSse', () => {
   it('delivers messages with event times from their age', async () => {
     vi.stubGlobal('EventSource', FakeEventSource);
@@ -195,6 +216,36 @@ describe('connectSse', () => {
     es.deliver([ev('old', 1, 3_000), ev('old', 2, 2_000), ev('old', 2, 2_000)]); // a repeat
     es.deliver([ev('new', 1, 3_000), ev('new', 2, 2_000), ev('new', 3, 0)]); // same history, then news
     expect(got).toHaveLength(3);
+  });
+
+  it("doesn't replay a removal from another instance's history over a re-added agent", () => {
+    vi.stubGlobal('EventSource', FakeEventSource);
+    const src = connectSse('/agents');
+    const types: string[] = [];
+    src.subscribe((m) => types.push(m.type));
+    const ev = (inst: string, seq: number, age: number) => ({
+      id: `${inst}:${seq}`,
+      data: wire({ seq, type: 'event', id: 'x', event: { type: 'tokens', count: 1 } }, { age }),
+    });
+    const rm = (inst: string, seq: number) => ({ id: `${inst}:${seq}`, data: wire({ seq, type: 'remove', id: 'x' }) });
+    const es = FakeEventSource.last;
+    es.deliver([ev('a', 1, 3_000), rm('a', 2), ev('a', 3, 1_000)]); // x removed, then back
+    es.deliver([ev('b', 1, 3_000), rm('b', 2), ev('b', 3, 1_000), ev('b', 4, 0)]); // a replica replays it
+    expect(types).toEqual(['event', 'remove', 'event', 'event']);
+  });
+
+  it('treats a sudden clock step as a step, not as delay', () => {
+    vi.stubGlobal('EventSource', FakeEventSource);
+    const got: AgentStreamMessage[] = [];
+    connectSse('/agents').subscribe((m) => got.push(m));
+    const ev = (seq: number, sent: number) => ({
+      id: `i:${seq}`,
+      data: wire({ seq, type: 'event', id: 'x', event: { type: 'start' } }, { age: 0, sent }),
+    });
+    FakeEventSource.last.deliver([ev(1, Date.now())]);
+    FakeEventSource.last.deliver([ev(2, Date.now() - 60_000)]); // this page's clock jumped a minute ahead
+    const t = got[1].type === 'event' ? got[1].event.time! : NaN;
+    expect(performance.now() - t).toBeLessThan(100);
   });
 
   it('ignores malformed messages', () => {

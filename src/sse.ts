@@ -87,13 +87,18 @@ export function createSseHandler(
         // Declared before stop() can run (during the history replay).
         // eslint-disable-next-line prefer-const
         let beat: ReturnType<typeof setInterval> | undefined;
-        // Queue level after the history replay, which is sent all at once.
-        let floor = -Infinity;
+        // Queue level the client is measured from: it follows the history
+        // replay (sent all at once) down, then rises as the client reads.
+        let floor = 0;
+        let replaying = true;
         const send = (text: string) => {
           if (!open) return;
           // A client that stopped reading live messages: let it reconnect
-          // (and resume) instead of queueing them.
-          if ((controller.desiredSize ?? 0) < floor - maxQueued) return stop();
+          // (and resume) instead of queueing them. The allowance shrinks
+          // back as the history replay is read.
+          const level = Math.min(0, controller.desiredSize ?? 0);
+          floor = replaying ? Math.min(floor, level) : Math.max(floor, level);
+          if (!replaying && level < floor - maxQueued) return stop();
           try {
             controller.enqueue(enc.encode(text));
           } catch {
@@ -118,7 +123,7 @@ export function createSseHandler(
           if (m.type === 'event' && typeof m.event.time === 'number') wire.age = Math.max(0, clock() - m.event.time);
           send(`id: ${instance}:${m.seq}\ndata: ${JSON.stringify(wire)}\n\n`);
         }, after);
-        floor = Math.min(0, controller.desiredSize ?? 0);
+        replaying = false;
         beat = setInterval(() => send(': keep-alive\n\n'), heartbeatMs);
         request.signal?.addEventListener('abort', () => stop());
         // The client may have gone while the source was being picked.
@@ -181,6 +186,9 @@ export function connectSse(url: string, options: SseSourceOptions = {}): AgentSo
   // instance of the same stream; fastest transit seen on this connection.
   let newest = -Infinity;
   let skipBefore = -Infinity;
+  // Catching up from another instance: until its history passes what was
+  // shown, its removals are old news too.
+  let catchingUp = false;
   let fastest = Infinity;
 
   const onMessage = (e: MessageEvent<string>) => {
@@ -197,7 +205,10 @@ export function connectSse(url: string, options: SseSourceOptions = {}): AgentSo
     if (inst !== instance) {
       // A restarted server (or another replica): its numbering starts over,
       // and what it replays from before now was shown already.
-      if (instance) skipBefore = newest;
+      if (instance) {
+        skipBefore = newest;
+        catchingUp = true;
+      }
       instance = inst;
       lastSeq = 0;
     }
@@ -206,17 +217,21 @@ export function connectSse(url: string, options: SseSourceOptions = {}): AgentSo
     lastId = e.lastEventId;
     const m = wire.m;
     if (m.type === 'event') {
-      // Arrival time minus the fastest transit is this message's delay.
+      // Arrival time minus the fastest transit is this message's delay; a
+      // jump of seconds is a clock being set, not delay: start over from it.
       const transit = Date.now() - wire.sent;
-      fastest = Math.min(fastest, transit);
-      const time = clock() - (wire.age ?? 0) - Math.max(0, transit - fastest);
-      if (time <= skipBefore + 1) return;
+      if (transit < fastest || transit - fastest > 5_000) fastest = transit;
+      const time = clock() - (wire.age ?? 0) - (transit - fastest);
+      // The same event replayed by another instance maps to about the same
+      // time (within processing jitter).
+      if (time <= skipBefore + 100) return;
+      catchingUp = false;
       newest = Math.max(newest, time);
       local.push(m.id, { ...m.event, time });
     } else if (m.type === 'agent') {
       const { name, color, config } = m;
       local.describe(m.id, { name, color, config });
-    } else local.remove(m.id);
+    } else if (!catchingUp) local.remove(m.id);
   };
   const connect = () => {
     if (typeof EventSource === 'undefined' || es) return;

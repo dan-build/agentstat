@@ -122,7 +122,9 @@ The endpoint exposes your agents' telemetry, so protect it like any route:
 `undefined` for a 404) — return the same stream object for the same agents
 each time. The stream lives in the server process: several replicas or
 serverless instances each have their own. A client that stops reading is
-disconnected (it reconnects and resumes) rather than buffered.
+disconnected (it reconnects and resumes) rather than buffered; so is one
+that falls behind a burst of more than `maxQueued` (1 000) messages, which
+costs a couple of seconds' pause, not data.
 
 ### Stream events
 
