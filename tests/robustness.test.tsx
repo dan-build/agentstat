@@ -7,12 +7,10 @@ import AgentStat from '../src/AgentStat';
 // during SSR streaming or while consumer data is still loading.
 describe('robustness — missing or empty props', () => {
   it('renders without crashing when no agents prop is provided', () => {
-    // @ts-expect-error — deliberately omitting required prop
     expect(() => render(<AgentStat />)).not.toThrow();
   });
 
   it('renders without crashing when agents is explicitly undefined', () => {
-    // @ts-expect-error — deliberately passing undefined
     expect(() => render(<AgentStat agents={undefined} />)).not.toThrow();
   });
 

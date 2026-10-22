@@ -147,6 +147,10 @@ export class AgentStore {
   options: StoreOptions;
 
   private _props = new Map<string, Agent>();
+  // Agents added by a stream source (not in the agents prop), in arrival order.
+  private _auto = new Set<string>();
+  // Prop agents that received source events (reset when the source changes).
+  private _sourced = new Set<string>();
   private _latency = new Map<string, number[]>();
   private _health = new Map<string, HealthMetrics>();
   private _episodes = new Map<string, Map<AnomalyKind, Episode>>();
@@ -201,16 +205,12 @@ export class AgentStore {
         continue;
       }
       nextProps.set(a.id, a);
+      // A stream-added agent that now appears in the prop: the prop owns it
+      // (and its data still came from the source).
+      if (this._auto.delete(a.id)) this._sourced.add(a.id);
       let rec = this.byId.get(a.id);
       if (!rec) {
-        rec = makeRecord(a);
-        this.byId.set(a.id, rec);
-        const series = createSeries(rec, this.options.maxHistoryPoints, now);
-        this.progress.set(a.id, series.progress);
-        this.tokens.set(a.id, series.tokens);
-        this.status.set(a.id, series.status);
-        this._statusSince.set(a.id, now);
-        this._workSince.set(a.id, now);
+        rec = this._create(a, now);
       } else {
         const prev = prevProps.get(a.id);
         if (!prev || prev.name !== a.name) rec.name = a.name ?? a.id;
@@ -222,12 +222,101 @@ export class AgentStore {
       }
       next.push(rec);
     }
+    for (const id of this._auto) next.push(this.byId.get(id) as AgentRecord);
     for (const id of Array.from(this.byId.keys())) {
-      if (!nextProps.has(id)) this._drop(id);
+      if (!nextProps.has(id) && !this._auto.has(id)) this._drop(id);
     }
     this._props = nextProps;
     this.list = next;
     this.dirty = true;
+  }
+
+  private _create(a: Agent, now: number): AgentRecord {
+    const rec = makeRecord(a);
+    this.byId.set(a.id, rec);
+    const series = createSeries(rec, this.options.maxHistoryPoints, now);
+    this.progress.set(a.id, series.progress);
+    this.tokens.set(a.id, series.tokens);
+    this.status.set(a.id, series.status);
+    this._statusSince.set(a.id, now);
+    this._workSince.set(a.id, now);
+    return rec;
+  }
+
+  // ── Stream sources ─────────────────────────────────────────────────────
+
+  /**
+   * Before a source's event at time `t`: add the agent if it's unknown
+   * (idle, after the prop agents), or move the start of an agent that has
+   * no data yet back to `t`, so replayed history isn't squashed into the
+   * moment the chart mounted.
+   */
+  ensure(id: string, t: number, now: number): void {
+    t = Math.min(t, now);
+    const rec = this.byId.get(id);
+    if (!rec) {
+      this._create({ id, name: id, current: { tokensRate: 0, progress: 0, status: 'complete' } }, t);
+      this._auto.add(id);
+      this.list = [...this.list, this.byId.get(id) as AgentRecord];
+      this.dirty = true;
+      return;
+    }
+    if (
+      t < (this._statusSince.get(id) ?? t) &&
+      this.tokens.get(id)?.length === 1 &&
+      !this._statusReported.has(id) &&
+      !this._streams.has(id)
+    ) {
+      this._recreate(id, toAgent(rec), t);
+    }
+    if (!this._auto.has(id)) this._sourced.add(id);
+  }
+
+  /** Start an agent over from `a` at `t` (all derived state goes). */
+  private _recreate(id: string, a: Agent, t: number): void {
+    const visible = this.byId.get(id)?.visible ?? true;
+    this._drop(id);
+    const rec = this._create(a, t);
+    rec.visible = visible;
+    this.list = this.list.map((r) => (r.id === id ? rec : r));
+    this.dirty = true;
+  }
+
+  /**
+   * A new source: its history will be replayed from the start, so what the
+   * previous one fed goes — its agents, and the data of prop agents it fed.
+   */
+  resetSource(now: number): void {
+    this.removeAuto();
+    for (const id of this._sourced) {
+      const a = this._props.get(id);
+      if (a && this.byId.has(id)) this._recreate(id, a, now);
+    }
+    this._sourced.clear();
+  }
+
+  /** Name, color or band for a source-added agent (the agents prop wins). */
+  describe(id: string, d: { name?: string; color?: string; config?: Agent['config'] }, now: number): void {
+    this.ensure(id, now, now);
+    const rec = this.byId.get(id);
+    if (!rec || this._props.has(id)) return;
+    if (typeof d.name === 'string') rec.name = d.name;
+    if (d.color !== undefined) rec.color = d.color;
+    if (d.config !== undefined) rec.config = d.config;
+    this.invalidate(true);
+  }
+
+  /** Remove source-added agents (all of them without `id`). */
+  removeAuto(id?: string): void {
+    const ids = id === undefined ? [...this._auto] : this._auto.has(id) ? [id] : [];
+    for (const x of ids) {
+      this._auto.delete(x);
+      this._drop(x);
+    }
+    if (ids.length) {
+      this.list = this.list.filter((r) => this.byId.has(r.id));
+      this.dirty = true;
+    }
   }
 
   /** Queue `resolved` for every open episode of an agent (removal, detection off). */
@@ -254,6 +343,7 @@ export class AgentStore {
     this._statusReported.delete(id);
     this._statusSince.delete(id);
     this._workSince.delete(id);
+    this._sourced.delete(id);
     this._streams.delete(id);
     this._sim.delete(id);
   }

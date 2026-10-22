@@ -15,8 +15,10 @@ import { build } from 'esbuild';
 // on all three eval sets 49 → 2.9 per agent-hour; see scripts/eval-detectors.mjs)
 // → event ingest 21.2 KB (`push` derives rate/TTFT/status from raw stream
 // events, plus the `waiting` status: event-driven agents at ~2 false alarms
-// per agent-hour on a fresh holdout, without hand-computed rates).
-const BUDGETS = { 'dist/index.js': 21_500, 'dist/index.cjs': 22_000 };
+// per agent-hour on a fresh holdout, without hand-computed rates) → event
+// streams 22.4 KB (`createAgentStream` + `source`: agents and history arrive
+// without wiring; the base for the AI SDK / AG-UI adapters).
+const BUDGETS = { 'dist/index.js': 22_500, 'dist/index.cjs': 23_000 };
 // The standalone detectors (detectAnomalies) on their own.
 const TREESHAKE_BUDGET = 2_500;
 

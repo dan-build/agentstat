@@ -59,6 +59,35 @@ export default function Monitor() {
 }
 ```
 
+### Event streams
+
+`createAgentStream()` (or `useAgentStream()` in a component) gives you a
+source to push events into from anywhere, even before a chart mounts. Agents
+appear on the chart as their first events arrive, so no roster is needed:
+
+```tsx
+const stream = createAgentStream(); // e.g. module-level, or useAgentStream()
+
+stream.push('coder', { type: 'tokens', count: 7 });
+stream.describe('coder', { name: 'Coder' }); // optional: name, color, config
+stream.remove('coder');                      // optional
+
+<AgentStat source={stream} metric="tokens" anomalyDetection />
+```
+
+The stream keeps the last 5 minutes of events, and a chart that mounts later
+replays them at their original times (`time`, if you pass one, uses the
+`performance.now()` clock). Agents in the `agents` prop come first (and their
+names and colors win); stream agents follow in arrival order, including an
+agent you removed from the prop if its events keep coming. The event types are
+those of `push` below.
+
+Create the stream once — `useAgentStream()`, or at module scope — and pass the
+same object on every render: a different `source` (or none) starts the
+chart's stream data over — the agents it added, and everything recorded for
+`agents`-prop agents it fed, including what you sent them through the ref — and
+replays the new one's history.
+
 ### Stream events
 
 `push` takes raw events, and AgentStat derives the token rate, time to first
