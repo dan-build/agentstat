@@ -2,6 +2,18 @@
 
 All notable changes to AgentStat are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`createAgentStream()` / `useAgentStream()` and `<AgentStat source>`.**
+  Push agent events into a stream from anywhere, before or after a chart
+  mounts; the chart subscribes, replays the stream's last 5 minutes at their
+  original times, and adds agents as their first events arrive (after the
+  `agents` prop's, which keep their names and colors). `describe(id, …)` sets
+  a name, color or band; `remove(id)` takes an agent off. One stream can feed
+  several charts. `agents` is now optional.
+
 ## [0.5.0] — 2026-10-22
 
 ### Added

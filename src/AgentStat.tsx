@@ -31,6 +31,7 @@ import type {
 import { DEFAULT_CAP, HEALTH_TICK_MS, HIT_RADIUS, PAD, clamp } from './core/constants';
 import { emaPoints } from './core/curve';
 import { AgentStore, type RowSnapshot } from './core/store';
+import type { AgentSource } from './stream';
 import type { AgentRecord } from './core/record';
 import { computeView, pointsFor, primaryBuffer, type View } from './core/view';
 import { ColorResolver } from './core/colors';
@@ -62,9 +63,17 @@ export interface AgentStatProps {
   /**
    * The roster: which agents exist and in what order. Changes to `name`,
    * `color`, `config` and `visible` on existing ids are applied; runtime
-   * values (rate, progress, status) come from `ref.current.updateAgent`.
+   * values (rate, progress, status) come from `source` or the ref. Optional
+   * with a `source`: its agents are added as their first events arrive.
    */
-  agents: Agent[];
+  agents?: Agent[];
+  /**
+   * Events to plot, e.g. from `createAgentStream()` / `useAgentStream()` or an
+   * adapter. History the source kept from before the chart mounted is
+   * replayed at its original times. Agents not in `agents` are added after
+   * them, in the order their first events arrived.
+   */
+  source?: AgentSource;
   /** Height of the chart. Number = px; any CSS length is accepted. Default 520. */
   height?: number | string;
   /** @deprecated Width is always 100% of the container. */
@@ -235,13 +244,17 @@ export const demoAgents: Agent[] = [
 // from the store's row snapshot.
 // ─────────────────────────────────────────────────────────────────────────────
 
+const NO_AGENTS: Agent[] = [];
+
 // No type arguments on the call: they make the compiler drop the pure
 // annotation, which would keep the whole component in tree-shaken bundles.
 const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
   {
-    // Default to [] so a missing prop (data still loading, SSR streaming,
-    // plain JS callers) renders an empty chart instead of throwing.
-    agents: initialAgents = [],
+    // Default to an empty roster so a missing prop (a `source` only, data
+    // still loading, plain JS callers) renders instead of throwing. One
+    // shared array, so the roster effect doesn't rerun on every render.
+    agents: initialAgents = NO_AGENTS,
+    source,
     height = 520,
     theme,
     referenceLine,
@@ -430,6 +443,37 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
     colors.clear();
     store.publish();
   }, [initialAgents, store, colors]);
+
+  // ── Source
+  // Messages this store has applied, so re-subscribing to the same source
+  // (StrictMode, a remount of the effect) doesn't apply history twice.
+  const seenRef = useRef<{ source?: AgentSource; seq: number }>({ seq: 0 });
+  useEffect(() => {
+    if (!source || typeof source.subscribe !== 'function') return;
+    const seen = seenRef.current;
+    if (seen.source !== source) {
+      // A different source: the agents the previous one added go.
+      store.removeAuto();
+      seenRef.current = { source, seq: 0 };
+    }
+    const unsubscribe = source.subscribe((m) => {
+      if (m.seq <= seenRef.current.seq) return;
+      seenRef.current.seq = m.seq;
+      const now = performance.now();
+      const n = store.list.length;
+      if (m.type === 'event') {
+        store.ensure(m.id, m.event.time ?? now);
+        store.push(m.id, m.event, now);
+      } else if (m.type === 'agent') {
+        store.describe(m.id, m, now);
+        store.publish();
+      } else {
+        store.removeAuto(m.id);
+      }
+      if (store.list.length !== n) store.publish();
+    }, seenRef.current.seq);
+    return unsubscribe;
+  }, [source, store]);
 
   // ── Imperative API
   useImperativeHandle(
