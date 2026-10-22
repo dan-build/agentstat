@@ -92,6 +92,8 @@ export function createAiSdkTap(sink: EventSink, agentId: string, options: Adapte
         });
         break;
       case 'error':
+        // Usually the end of a failed stream: the next one starts afresh.
+        running = false;
         push({ type: 'error' });
         break;
       case 'finish':
@@ -131,6 +133,11 @@ export async function tapAiSdkStream(
   if (!ended) sink.push(agentId, { type: 'finish' });
 }
 
+export interface ChatTrackerOptions extends AdapterOptions {
+  /** Tools your frontend runs: the agent waits on them after a request ends. */
+  clientTools?: string[];
+}
+
 /** A `useChat` message (only the fields AgentStat reads). */
 export type ChatMessage = {
   id: string;
@@ -148,9 +155,10 @@ const DONE = new Set(['output-available', 'output-error', 'output-denied']);
  * since the last call — streamed text, tool calls, the request lifecycle —
  * and pushes it, in stream order, for `agentId`. Messages that were already
  * there on the first call, or that change while no request is running
- * (restored history, `setMessages`), aren't reported as output. A tool your
- * frontend runs, or one awaiting approval, keeps the agent `waiting` after
- * the request ends, until its result is added.
+ * (restored history, `setMessages`), aren't reported as output. A tool call
+ * awaiting approval, or one of `clientTools` (tools your frontend runs),
+ * keeps the agent `waiting` after the request ends, until it's answered; any
+ * other open call ends with the request (e.g. the user pressed Stop).
  *
  * ```tsx
  * const track = useMemo(() => createChatTracker(stream, 'chat'), [stream]);
@@ -161,7 +169,7 @@ const DONE = new Set(['output-available', 'output-error', 'output-denied']);
 export function createChatTracker(
   sink: EventSink,
   agentId: string,
-  options: AdapterOptions = {}
+  options: ChatTrackerOptions = {}
 ): (messages: readonly ChatMessage[], status: string) => void {
   const count = options.countTokens ?? estimate;
   const push = (e: AgentEvent) => sink.push(agentId, e);
@@ -169,6 +177,9 @@ export function createChatTracker(
   let id = '';
   let chars = 0;
   let tools = new Map<string, string>();
+  // Tool name of each call.
+  const toolNames = new Map<string, string>();
+  const client = new Set(options.clientTools ?? []);
   let last: string | null = null;
   return (messages, status) => {
     const m = messages[messages.length - 1];
@@ -180,7 +191,13 @@ export function createChatTracker(
       p.state === 'output-available' && p.preliminary === true ? 'input-available' : p.state ?? '';
     const isTool = (p: ChatMessage['parts'][number]) =>
       !!p.toolCallId && (p.type.startsWith('tool-') || p.type === 'dynamic-tool');
-    const pending = () => [...tools.values()].some((st) => OPEN.has(st));
+    const nameOf = (p: ChatMessage['parts'][number]) => p.toolName ?? p.type.slice('tool-'.length);
+    // What the agent still waits on once a request has ended: an approval,
+    // or a tool the frontend runs.
+    const pending = () =>
+      [...tools].some(
+        ([callId, st]) => st === 'approval-requested' || (OPEN.has(st) && client.has(toolNames.get(callId) ?? ''))
+      );
     // First call, or no request running: take the messages as they are
     // (restored history, setMessages), except that a tool the agent was left
     // waiting on (a frontend tool, an approval) can resolve.
@@ -195,8 +212,11 @@ export function createChatTracker(
         if (!isTool(p)) continue;
         const state = stateOf(p);
         tools.set(p.toolCallId as string, state);
-        if (waited && OPEN.has(before.get(p.toolCallId as string) ?? '') && DONE.has(state)) {
-          push({ type: 'tool-end', name: p.toolName ?? p.type.slice('tool-'.length), error: state === 'output-error' });
+        toolNames.set(p.toolCallId as string, nameOf(p));
+        const was = before.get(p.toolCallId as string) ?? '';
+        // An answered approval or a finished frontend tool closes the call.
+        if (waited && OPEN.has(was) && (DONE.has(state) || (was === 'approval-requested' && state !== was))) {
+          push({ type: 'tool-end', name: nameOf(p), error: state === 'output-error' });
         }
       }
       if (waited && !pending()) push({ type: 'finish' });
@@ -239,8 +259,9 @@ export function createChatTracker(
         const prev = tools.get(callId);
         if (prev === state) continue;
         tools.set(callId, state);
+        toolNames.set(callId, nameOf(p));
         flush();
-        const name = p.toolName ?? p.type.slice('tool-'.length);
+        const name = nameOf(p);
         const done = DONE.has(state);
         // A call can go from streaming its input to done between two calls.
         if (!OPEN.has(prev ?? '') && (OPEN.has(state) || done)) push({ type: 'tool-start', name });
@@ -251,7 +272,7 @@ export function createChatTracker(
     }
     if (status !== last) {
       if (status === 'error') push({ type: 'error' });
-      // A frontend tool or an approval still pending: the agent waits on it.
+      // An approval or a frontend tool still pending: the agent waits on it.
       if (status === 'error' || (status === 'ready' && !pending())) push({ type: 'finish' });
     }
     last = status;

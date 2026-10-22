@@ -72,6 +72,16 @@ describe('createAiSdkTap', () => {
     expect(s.types()).toEqual(['tool-start', 'tool-end']);
   });
 
+  it('starts the next stream after an error ended the last one', () => {
+    const s = sink();
+    const tap = createAiSdkTap(s, 'w');
+    tap({ type: 'start-step' });
+    tap({ type: 'error' });
+    s.push('w', { type: 'finish' }); // the caller ends the failed stream
+    tap({ type: 'start-step' });
+    expect(s.types()).toEqual(['start', 'error', 'finish', 'start']);
+  });
+
   it('ignores unknown and malformed parts', () => {
     const s = sink();
     const tap = createAiSdkTap(s, 'w');
@@ -170,7 +180,7 @@ describe('createChatTracker', () => {
 
   it('keeps waiting on a frontend tool after the request ends, until its result', () => {
     const s = sink();
-    const track = createChatTracker(s, 'chat');
+    const track = createChatTracker(s, 'chat', { clientTools: ['askUser'] });
     track([], 'ready');
     track(msg([]).slice(0, 1), 'submitted');
     const ask = (state: string) => msg([{ type: 'tool-askUser', toolCallId: 'c', state }]);
@@ -178,6 +188,30 @@ describe('createChatTracker', () => {
     track(ask('input-available'), 'ready'); // request over, tool pending
     expect(s.types()).toEqual(['start', 'tool-start']);
     track(ask('output-available'), 'ready'); // the person answered
+    expect(s.types()).toEqual(['start', 'tool-start', 'tool-end', 'finish']);
+  });
+
+  it('ends a server tool call with the request when the user stops it', () => {
+    const s = sink();
+    const track = createChatTracker(s, 'chat');
+    track([], 'ready');
+    track(msg([]).slice(0, 1), 'submitted');
+    const part = msg([{ type: 'tool-search', toolCallId: 'c', state: 'input-available' }]);
+    track(part, 'streaming');
+    track(part, 'ready'); // Stop: the output never arrives
+    expect(s.types()).toEqual(['start', 'tool-start', 'finish']);
+  });
+
+  it('waits on an approval, and finishes once it is answered', () => {
+    const s = sink();
+    const track = createChatTracker(s, 'chat');
+    track([], 'ready');
+    track(msg([]).slice(0, 1), 'submitted');
+    const pay = (state: string) => msg([{ type: 'tool-pay', toolCallId: 'c', state }]);
+    track(pay('approval-requested'), 'streaming');
+    track(pay('approval-requested'), 'ready');
+    expect(s.types()).toEqual(['start', 'tool-start']);
+    track(pay('approval-responded'), 'ready'); // the app may not resend
     expect(s.types()).toEqual(['start', 'tool-start', 'tool-end', 'finish']);
   });
 
@@ -247,29 +281,27 @@ describe('createAgUiTap', () => {
     ]);
   });
 
-  it('leaves nested runs and subagent events to their own agents', () => {
+  it('leaves subagent events to their own agents', () => {
     const s = sink();
     const tap = createAgUiTap(s, 'o', { countTokens: () => 1 });
     for (const e of [
       { type: 'RUN_STARTED' },
-      { type: 'TOOL_CALL_START', toolCallId: 'd', toolCallName: 'delegate' },
-      { type: 'TOOL_CALL_END', toolCallId: 'd' },
-      { type: 'RUN_STARTED', parentRunId: 'o' },
-      { type: 'TEXT_MESSAGE_CONTENT', delta: 'child' },
-      { type: 'RUN_FINISHED' },
       { type: 'TEXT_MESSAGE_CONTENT', delta: 'sub', subagentRunId: 's1' },
+      { type: 'TOOL_CALL_START', toolCallId: 'x', toolCallName: 'sub', subagentRunId: 's1' },
       { type: 'SUBAGENT_ERROR' },
-      { type: 'TOOL_CALL_RESULT', toolCallId: 'd' },
       { type: 'RUN_FINISHED' },
     ])
       tap(e);
-    expect(s.got.map(([, e]) => e)).toEqual([
-      { type: 'start' },
-      { type: 'tool-start', name: 'delegate' },
-      { type: 'error' },
-      { type: 'tool-end', name: 'delegate' },
-      { type: 'finish' },
-    ]);
+    expect(s.types()).toEqual(['start', 'error', 'finish']);
+  });
+
+  it("reports a child agent's own stream (runs with parentRunId)", () => {
+    const s = sink();
+    const tap = createAgUiTap(s, 'child', { countTokens: () => 1 });
+    tap({ type: 'RUN_STARTED', parentRunId: 'p' } as never);
+    tap({ type: 'TEXT_MESSAGE_CONTENT', delta: 'hi' });
+    tap({ type: 'RUN_FINISHED' });
+    expect(s.types()).toEqual(['start', 'tokens', 'finish']);
   });
 
   it('does not count a stopped run as an error', () => {

@@ -154,9 +154,11 @@ await tapAiSdkStream(stream, 'writer', result.fullStream);
 ```
 
 Text and reasoning count as output (with the stream taps, tool-call arguments
-too); a tool call is `waiting` until its result. That includes a tool your
-frontend runs or one awaiting approval, after the request ends, so a person
-taking over 5 minutes shows as a stall (`waitingStallMs`). The chat tracker
+too); a tool call is `waiting` until its result. After a request ends, the
+chat tracker keeps waiting only on a call awaiting approval or on tools you
+list in `{ clientTools: ['askUser'] }` (tools your frontend runs), so a person
+taking over 5 minutes shows as a stall (`waitingStallMs`); other open calls
+end with the request (e.g. the user pressed Stop). The chat tracker
 doesn't report messages that were there on its first call or that change
 while no request runs (restored history, `setMessages`). Token counts are
 estimated from characters (~4 per token); pass `{ countTokens }` for exact
@@ -183,7 +185,8 @@ Runs map to start/finish (`RUN_ERROR` counts an error), message, reasoning
 and tool-argument deltas to output, and a tool call is `waiting` from
 `TOOL_CALL_END` to `TOOL_CALL_RESULT` (or the end of the run, for tools your
 frontend runs). A stopped run (`RUN_ERROR` with code `abort`) isn't counted
-as an error. Nested runs and subagent events are left to their own agents.
+as an error. Subagent events are left to their own agents; give a child
+agent's own stream its own tap.
 Pass events as the AG-UI client delivers them: it expands `*_CHUNK` events,
 and raw chunk streams lose tool calls.
 

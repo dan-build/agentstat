@@ -21,7 +21,8 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
 - **Adapters**, as separate entry points with no dependencies (~1 KB each,
   server-safe):
   - **`@dan-build/agentstat/ai-sdk`** (Vercel AI SDK v5–v7):
-    `createChatTracker` for `useChat` messages and status, `createAiSdkTap` /
+    `createChatTracker` for `useChat` messages and status (with
+    `clientTools` for tools your frontend runs), `createAiSdkTap` /
     `tapAiSdkStream` for `streamText().fullStream` and UI message stream
     chunks.
   - **`@dan-build/agentstat/ag-ui`**: `createAgUiTap` for AG-UI protocol
