@@ -115,17 +115,20 @@ export type Agent = {
  * token rate, time to first token, inter-token latency and status from these,
  * so you forward what your stream emits instead of computing rates yourself.
  *
- * `time` is optional, in the `performance.now()` clock (default: now). Events
- * must arrive in order; a time earlier than the previous event's is treated
- * as the previous event's time.
+ * `time` is optional, in the `performance.now()` clock (default: now). A time
+ * in the future is treated as now; one earlier than anything already recorded
+ * for the agent, as that time.
+ *
+ * Statuses derived from events don't replace a `stuck` or `hallucinating`
+ * status set with `updateAgent`; that holds until `updateAgent` changes it.
  */
 export type AgentEvent =
   /** A model request was sent. Status → `thinking`; starts the TTFT clock. */
   | { type: 'start'; time?: number }
   /**
    * Output arrived. Pass `count` (tokens in this chunk) or `total` (running
-   * count for the agent; a smaller total than before starts a new count).
-   * Status → `active`.
+   * count for the agent: the first total only sets the starting point, and a
+   * smaller total than before starts a new count). Status → `active`.
    */
   | { type: 'tokens'; count?: number; total?: number; time?: number }
   /** A tool call began (nest freely). Status → `waiting` while any is open. */

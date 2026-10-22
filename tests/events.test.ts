@@ -47,16 +47,71 @@ describe('push: derived values', () => {
     s.push('a', { type: 'tool-start' }, T0 + 2_000);
     s.push('a', { type: 'tool-end' }, T0 + 5_000);
     s.push('a', { type: 'tokens', count: 5 }, T0 + 5_500);
-    expect(s.byId.get('a')!.current.tokensRate).toBeGreaterThan(30);
+    const rate = s.byId.get('a')!.current.tokensRate;
+    expect(rate).toBeGreaterThan(30);
+    expect(rate).toBeLessThan(50);
+  });
+
+  it('keeps inter-token latency to streaming gaps, not pauses', () => {
+    const s = make();
+    stream(s, T0, T0 + 2_000, 50, 5); // every 100 ms
+    stream(s, T0 + 32_000, T0 + 34_000, 50, 5); // after a 30 s silence
+    expect(s.getStats('a', T0 + 34_000)!.interTokenMs).toBeCloseTo(100, 0);
+  });
+
+  it('ignores a tool-end with no open call', () => {
+    const s = make();
+    stream(s, T0, T0 + 1_000, 40);
+    s.push('a', { type: 'tool-end', name: 'x' }, T0 + 1_000);
+    expect(s.byId.get('a')!.current.status).toBe('active');
+    expect(s.getStats('a', T0 + 1_000)!.ttftMs).toBeNull();
+  });
+
+  it('keeps a status set with updateAgent until updateAgent changes it', () => {
+    const s = make();
+    s.ingest('a', { status: 'hallucinating' }, T0);
+    stream(s, T0, T0 + 1_000, 40);
+    expect(s.byId.get('a')!.current.status).toBe('hallucinating');
+    s.ingest('a', { status: 'active' }, T0 + 1_000);
+    s.push('a', { type: 'tool-start' }, T0 + 1_100);
+    expect(s.byId.get('a')!.current.status).toBe('waiting');
   });
 
   it('turns cumulative totals into deltas; a smaller total starts a new count', () => {
     const s = make();
-    s.push('a', { type: 'tokens', total: 100 }, T0);
+    s.push('a', { type: 'tokens', total: 100 }, T0); // starting point only
     s.push('a', { type: 'tokens', total: 150 }, T0 + 1_000);
     s.push('a', { type: 'tokens', total: 150 }, T0 + 1_500);
     s.push('a', { type: 'tokens', total: 30 }, T0 + 2_000);
-    expect(s.getStats('a', T0 + 2_000)!.totalTokens).toBe(180);
+    expect(s.getStats('a', T0 + 2_000)!.totalTokens).toBe(80);
+  });
+
+  it('does not read a large first total (agent already running) as a burst', () => {
+    const s = make();
+    s.push('a', { type: 'tokens', total: 5_000 }, T0);
+    for (let i = 1; i <= 50; i++) s.push('a', { type: 'tokens', total: 5_000 + 3 * i }, T0 + 100 * i);
+    const rates = s.tokens.get('a')!.values();
+    expect(Math.max(...rates)).toBeLessThan(60);
+    expect(s.byId.get('a')!.current.tokensRate).toBeCloseTo(30, -1);
+  });
+
+  it('reads a one-event response as its tokens over the time since the request', () => {
+    const s = make();
+    s.push('a', { type: 'start' }, T0);
+    s.push('a', { type: 'tokens', count: 400 }, T0 + 3_000); // non-streaming provider
+    ticks(s, T0 + 3_500, T0 + 3_500); // sampled at the event, once no second chunk came
+    expect(s.tokens.get('a')!.lastT).toBe(T0 + 3_000);
+    expect(s.byId.get('a')!.current.tokensRate).toBeCloseTo(400 / 3, 5);
+    const s2 = make();
+    s2.push('a', { type: 'tokens', count: 20 }, T0); // no request, no gap known: over 1 s
+    ticks(s2, T0 + 500, T0 + 500);
+    expect(s2.tokens.get('a')!.since(T0).map((p) => p.v)).toContain(20);
+    // A second chunk shows the gap instead: no inflated first reading.
+    const s3 = make();
+    s3.push('a', { type: 'start' }, T0);
+    s3.push('a', { type: 'tokens', count: 5 }, T0 + 2_000);
+    s3.push('a', { type: 'tokens', count: 5 }, T0 + 2_100);
+    expect(s3.byId.get('a')!.current.tokensRate).toBeCloseTo(50, 5);
   });
 
   it('measures TTFT from start and feeds it to the latency trend', () => {
@@ -114,8 +169,30 @@ describe('push: derived values', () => {
     s.push('a', { type: 'start', time: T0 + 5_000 }, T0 + 1_000); // future → now
     s.push('a', { type: 'tokens', count: 4, time: T0 }, T0 + 1_500); // earlier → previous
     expect(s.getStats('a', T0 + 1_500)!.ttftMs).toBe(0);
-    const times = s.tokens.get('a')!.since(0).map((p) => p.t);
-    expect([...times].sort((x, y) => x - y)).toEqual(times);
+  });
+
+  it('never records a status before one already recorded', () => {
+    const s = make();
+    s.push('a', { type: 'start', time: 0 }, T0 + 1_000); // another clock entirely
+    s.ingest('a', { status: 'active' }, T0 + 5_000);
+    s.push('a', { type: 'tool-start', time: T0 + 4_000 }, T0 + 6_000);
+    const log = s.status.get('a')!.transitionsInRange(0, T0 + 10_000).map((c) => c.t);
+    expect([...log].sort((x, y) => x - y)).toEqual(log);
+    expect(log[log.length - 1]).toBe(T0 + 5_000);
+    expect(s.getStats('a', T0 + 6_000)!.statusMs).toBe(1_000);
+  });
+
+  it('keeps the times of batched events delivered late', () => {
+    const s = make();
+    // Events every 50 ms (20 t/s), delivered in 1 s batches, health ticks between.
+    for (let batch = 0; batch < 10; batch++) {
+      const at = T0 + (batch + 1) * 1_000;
+      for (let k = 0; k < 20; k++) s.push('a', { type: 'tokens', count: 1, time: at - 1_000 + k * 50 }, at);
+      ticks(s, at + 500, at + 500);
+    }
+    expect(s.getStats('a', T0 + 11_000)!.interTokenMs).toBeCloseTo(50, 0);
+    const recent = s.tokens.get('a')!.valuesSince(T0 + 3_000);
+    expect(Math.min(...recent)).toBeGreaterThan(10);
   });
 
   it('ignores malformed events with one warning', () => {
@@ -163,11 +240,27 @@ describe('waiting and stalls', () => {
     const s = make();
     s.push('a', { type: 'start' }, T0);
     ticks(s, T0 + 500, T0 + 20_000); // 20 s quiet thinking: under its limit
-    stream(s, T0 + 20_000, T0 + 30_000, 40);
-    const found = ticks(s, T0 + 20_500, T0 + 45_000);
+    for (let t = T0 + 20_000; t < T0 + 30_000; t += 125) {
+      s.push('a', { type: 'tokens', count: 5 }, t);
+      if ((t - T0) % 500 === 0) ticks(s, t, t);
+    }
+    const found = ticks(s, T0 + 30_000, T0 + 45_000);
     expect(found).toHaveLength(1);
     expect(found[0].message).toMatch(/while active/);
     expect(found[0].t).toBeGreaterThanOrEqual(T0 + 29_000);
+  });
+
+  it('still reports a stall when an agent with no output flips thinking ↔ active', () => {
+    const s = make();
+    s.ingest('a', { tokensRate: 30, status: 'active' }, T0);
+    for (let t = T0; t < T0 + 15_000; t += 100) s.ingest('a', { tokensRate: 30 }, t);
+    const found: Anomaly[] = [];
+    for (let t = T0 + 15_000; t <= T0 + 60_000; t += 500) {
+      const flip = Math.floor((t - T0) / 6_000) % 2 ? 'thinking' : 'active';
+      s.ingest('a', { tokensRate: 0, status: flip }, t);
+      found.push(...ticks(s, t, t));
+    }
+    expect(found.some((a) => a.kind === 'stall')).toBe(true);
   });
 
   it('detectStall: waiting is judged by its length only', () => {

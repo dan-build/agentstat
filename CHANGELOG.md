@@ -22,18 +22,22 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
   while waiting: only a wait longer than **`waitingStallMs`** (5 min) is a
   stall, reported as `waiting on run_tests for 300s`. Moving between
   `waiting` and the other working states isn't thrash. `push` sets it for
-  tool calls; with `updateAgent`, report it yourself. **Type change:**
-  `AgentStatus` has a new member, so exhaustive `switch`es over it need a
-  `waiting` case.
+  tool calls; with `updateAgent`, report it yourself. Health doesn't count
+  zero output against an agent while it's waiting.
+- **Type changes.** `AgentStatus` has a new member, so exhaustive `switch`es
+  over it need a `waiting` case. `AgentStatRef` has two new methods, so mocks
+  typed as `AgentStatRef` need `push` and `getStats`. `AnomalyConfig` has a
+  new field, `waitingStallMs`, so complete objects of that type need it (a
+  `Partial<AnomalyConfig>` for `anomalyConfig` doesn't). If you copied the
+  `thrashBenignStatuses` default, add `waiting` to it.
 - **Measured.** The detector evaluation gains two sets of event-driven agents:
   one written with this change, and a fresh holdout of 20 scenarios written
   by a reviewer who saw neither the detectors nor the other sets (chat
   streams, tool-heavy coding agents, orchestrators, reasoning models, hung
   tools, dropped streams, repetition loops). On that holdout: 100% recall
-  (10/10); precision 28.8% → 53.1% and false alarms 6.6 → 2.4 per agent-hour
-  after one round of fixes to how the rate is derived (the first figures are
-  from before any change made after seeing it). The earlier three sets are
-  unchanged.
+  (10/10); precision 28.8% → 54.8% and false alarms 6.6 → 2.2 per agent-hour
+  after fixes to how the rate is derived (the first figures are from before
+  any change made after seeing it). The earlier three sets are unchanged.
 
 ### Changed
 

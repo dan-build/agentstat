@@ -73,10 +73,15 @@ ref.current?.push('coder', { type: 'finish' });                    // → comple
 ref.current?.getStats('coder'); // { totalTokens, ttftMs, interTokenMs, tool, statusMs }
 ```
 
-Every event takes an optional `time` (`performance.now()` clock). Tool calls
-can nest or run in parallel; the agent is `waiting` while any is open. TTFT
-also feeds the health score's latency trend. Send `finish` when a run ends:
-an agent left `active` with no output is a stall.
+Every event takes an optional `time` (`performance.now()` clock; a time before
+something already recorded for the agent is moved up to it). Tool calls can
+nest or run in parallel; the agent is `waiting` while any is open. TTFT also
+feeds the health score's latency trend. Send `finish` when a run ends: an
+agent left `active` with no output is a stall.
+
+`total` is a running count for the agent: the first one only sets the starting
+point, and a smaller one than before starts a new count. A status you set with
+`updateAgent` (`stuck`, `hallucinating`) holds until you change it there.
 
 ### Samples
 

@@ -62,7 +62,9 @@ export const calculateHealth = (
   // tracks what the line shows instead of flickering every tick.
   const [minTok, maxTok] = config?.expectedTokensPerSec ?? DEFAULT_BAND;
   const repRate = rates.length ? mean(rates) : current.tokensRate;
-  const outside = repRate < minTok ? minTok - repRate : repRate > maxTok ? repRate - maxTok : 0;
+  // Waiting on a tool, subagents or a person: no output is expected.
+  const outside =
+    current.status === 'waiting' ? 0 : repRate < minTok ? minTok - repRate : repRate > maxTok ? repRate - maxTok : 0;
   const tokenEfficiency = Number.isFinite(outside)
     ? Math.max(0, 100 - (outside / Math.max(maxTok, 1)) * 100)
     : 0;
