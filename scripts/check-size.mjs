@@ -16,7 +16,7 @@ import { build } from 'esbuild';
 // → event ingest 21.2 KB (`push` derives rate/TTFT/status from raw stream
 // events, plus the `waiting` status: event-driven agents at ~2 false alarms
 // per agent-hour on a fresh holdout, without hand-computed rates) → event
-// streams 22.0 KB (`createAgentStream` + `source`: agents and history arrive
+// streams 22.4 KB (`createAgentStream` + `source`: agents and history arrive
 // without wiring; the base for the AI SDK / AG-UI adapters).
 const BUDGETS = { 'dist/index.js': 22_500, 'dist/index.cjs': 23_000 };
 // The standalone detectors (detectAnomalies) on their own.

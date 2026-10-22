@@ -449,13 +449,22 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
   // (StrictMode, a remount of the effect) doesn't apply history twice.
   const seenRef = useRef<{ source?: AgentSource; seq: number; changes: number }>({ seq: 0, changes: 0 });
   useEffect(() => {
-    if (!source || typeof source.subscribe !== 'function') return;
     const seen = seenRef.current;
+    if (!source || typeof source.subscribe !== 'function') {
+      // Source taken away: what it fed goes.
+      if (seen.source) {
+        store.resetSource(performance.now());
+        store.publish();
+      }
+      seen.source = undefined;
+      return;
+    }
     if (seen.source !== source) {
       // A different source replays from the start: what the previous one
       // fed goes first, so nothing is counted twice.
       if (seen.source) {
         store.resetSource(performance.now());
+        store.publish();
         if (++seen.changes === 3) {
           warnOnce('source-identity', 'The `source` prop changed 3 times; create it once (useAgentStream, or at module scope), not on every render.');
         }

@@ -92,7 +92,7 @@ describe('createAgentStream', () => {
     now = 4_000_000;
     const late: string[] = [];
     s.subscribe((m) => late.push(m.type));
-    expect(late).toEqual(['agent']);
+    expect(late).toEqual([]); // nothing kept for 'a' but its description: gone
     vi.restoreAllMocks();
   });
 });
@@ -180,6 +180,33 @@ describe('<AgentStat source>', () => {
     expect(ref.current!.getStats('lead')!.totalTokens).toBe(8);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('changed 3 times'));
     warn.mockRestore();
+  });
+
+  it('resets a stream agent the prop took over when the source changes', async () => {
+    const a = createAgentStream();
+    a.push('w', { type: 'tokens', count: 8 });
+    const ref = createRef<AgentStatRef>();
+    const { rerender } = render(<AgentStat ref={ref} source={a} />);
+    await tick(10);
+    const agents = [createAgent('w', 'W')]; // roster loads after mount
+    rerender(<AgentStat ref={ref} agents={agents} source={a} />);
+    await tick(10);
+    rerender(<AgentStat ref={ref} agents={agents} source={createAgentStream()} />);
+    await tick(10);
+    expect(ref.current!.getStats('w')!.totalTokens).toBe(0);
+    rerender(<AgentStat ref={ref} agents={agents} source={a} />);
+    await tick(10);
+    expect(ref.current!.getStats('w')!.totalTokens).toBe(8);
+  });
+
+  it('removes source agents when the source is taken away', async () => {
+    const a = createAgentStream();
+    a.push('x', { type: 'start' });
+    const { container, rerender } = render(<AgentStat source={a} />);
+    await tick(10);
+    rerender(<AgentStat />);
+    await tick(10);
+    expect(legendNames(container)).toEqual([]);
   });
 
   it('keeps source agents when the agents prop changes', async () => {

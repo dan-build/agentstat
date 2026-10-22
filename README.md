@@ -83,8 +83,10 @@ agent you removed from the prop if its events keep coming. The event types are
 those of `push` below.
 
 Create the stream once — `useAgentStream()`, or at module scope — and pass the
-same object on every render: a different `source` starts the chart's stream
-data over and replays the new one's history.
+same object on every render: a different `source` (or none) starts the
+chart's stream data over — the agents it added, and everything recorded for
+`agents`-prop agents it fed, including what you sent them through the ref — and
+replays the new one's history.
 
 ### Stream events
 

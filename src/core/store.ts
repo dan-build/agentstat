@@ -205,8 +205,9 @@ export class AgentStore {
         continue;
       }
       nextProps.set(a.id, a);
-      // A stream-added agent that now appears in the prop: the prop owns it.
-      this._auto.delete(a.id);
+      // A stream-added agent that now appears in the prop: the prop owns it
+      // (and its data still came from the source).
+      if (this._auto.delete(a.id)) this._sourced.add(a.id);
       let rec = this.byId.get(a.id);
       if (!rec) {
         rec = this._create(a, now);

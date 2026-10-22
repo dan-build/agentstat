@@ -126,6 +126,10 @@ export function createAgentStream(): AgentStream {
       const first = h < l.length ? l[h].seq : seq + 1;
       // Descriptions that aged out of the log come first (they're older than
       // anything kept), then the kept messages in order.
+      // An agent with nothing kept beyond its description is long gone.
+      const kept = new Set<string>();
+      for (let i = h; i < l.length; i++) kept.add(l[i].id);
+      for (const [id, m] of info) if (m.seq < first && !kept.has(id)) info.delete(id);
       const aged = [...info.values()].filter((m) => m.seq > after && m.seq < first);
       for (const m of aged.sort((a, b) => a.seq - b.seq)) listener(m);
       for (let i = h; i < l.length; i++) if (l[i].seq > after) listener(l[i]);
