@@ -47,6 +47,15 @@ for (const [file, budget] of Object.entries(BUDGETS)) {
   report(/^['"]use client['"]/.test(src), `${file}: starts with 'use client'`);
 }
 
+// Adapters: small, and free of the client directive so they run on servers.
+const ADAPTER_BUDGET = 1_500;
+for (const file of ['dist/ai-sdk.js', 'dist/ag-ui.js']) {
+  const out = await build({ entryPoints: [file], bundle: true, minify: true, write: false, format: 'esm', logLevel: 'silent' });
+  const gz = gzipSync(out.outputFiles[0].contents).length;
+  report(gz <= ADAPTER_BUDGET, `${file}: ${gz} B bundled min+gzip (budget ${ADAPTER_BUDGET} B)`);
+  report(!/use client/.test(readFileSync(file, 'utf8')), `${file}: no 'use client' (server-safe)`);
+}
+
 const entry = fileURLToPath(new URL('../dist/index.js', import.meta.url));
 const out = await build({
   stdin: { contents: `export { detectAnomalies } from ${JSON.stringify(entry)};`, resolveDir: '.' },
@@ -62,8 +71,8 @@ report(shaken <= TREESHAKE_BUDGET, `tree-shaken detectAnomalies import: ${shaken
 
 // Internal members are renamed at build time (mangleProps /^_/). A public
 // name starting with "_" would be renamed in the code but not in the types.
-const dts = readFileSync('dist/index.d.ts', 'utf8');
+const dts = ['dist/index.d.ts', 'dist/ai-sdk.d.ts', 'dist/ag-ui.d.ts'].map((f) => readFileSync(f, 'utf8')).join('\n');
 const underscored = dts.match(/\b_[A-Za-z]\w*/g) ?? [];
-report(underscored.length === 0, `dist/index.d.ts exposes no _-prefixed names${underscored.length ? `: ${[...new Set(underscored)].join(', ')}` : ''}`);
+report(underscored.length === 0, `dist/*.d.ts expose no _-prefixed names${underscored.length ? `: ${[...new Set(underscored)].join(', ')}` : ''}`);
 
 process.exit(failed ? 1 : 0);

@@ -56,3 +56,24 @@ describe.skipIf(!pkg)('built package', () => {
     vi.restoreAllMocks();
   });
 });
+
+// Paths in variables: the type checker mustn't need dist/ (CI typechecks first).
+const AI_SDK = '../dist/ai-sdk.js';
+const AG_UI = '../dist/ag-ui.js';
+const aiSdk: typeof import('../src/ai-sdk') | null = await import(/* @vite-ignore */ AI_SDK).catch(() => null);
+const agUi: typeof import('../src/ag-ui') | null = await import(/* @vite-ignore */ AG_UI).catch(() => null);
+
+describe.skipIf(!aiSdk || !agUi)('built adapters', () => {
+  it('map parts and events', () => {
+    const got: string[] = [];
+    const sink = { push: (_id: string, e: { type: string }) => got.push(e.type) };
+    const tap = aiSdk!.createAiSdkTap(sink, 'a');
+    tap({ type: 'start-step' });
+    tap({ type: 'tool-call', toolCallId: 'c', toolName: 't' });
+    tap({ type: 'tool-result', toolCallId: 'c' });
+    const ag = agUi!.createAgUiTap(sink, 'b');
+    ag({ type: 'RUN_STARTED' });
+    ag({ type: 'RUN_FINISHED' });
+    expect(got).toEqual(['start', 'tool-start', 'tool-end', 'start', 'finish']);
+  });
+});

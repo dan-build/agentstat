@@ -19,7 +19,37 @@
         "default": "./dist/index.cjs"
       }
     },
+    "./ai-sdk": {
+      "import": {
+        "types": "./dist/ai-sdk.d.ts",
+        "default": "./dist/ai-sdk.js"
+      },
+      "require": {
+        "types": "./dist/ai-sdk.d.cts",
+        "default": "./dist/ai-sdk.cjs"
+      }
+    },
+    "./ag-ui": {
+      "import": {
+        "types": "./dist/ag-ui.d.ts",
+        "default": "./dist/ag-ui.js"
+      },
+      "require": {
+        "types": "./dist/ag-ui.d.cts",
+        "default": "./dist/ag-ui.cjs"
+      }
+    },
     "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "ai-sdk": [
+        "./dist/ai-sdk.d.ts"
+      ],
+      "ag-ui": [
+        "./dist/ag-ui.d.ts"
+      ]
+    }
   },
   "files": [
     "dist"
@@ -30,7 +60,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsup",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsup",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.dev.json",
     "lint": "eslint src tests dev examples",
