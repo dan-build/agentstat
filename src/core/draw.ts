@@ -11,7 +11,7 @@ import { FONT_SANS, type ThemeMode, type ThemeTokens } from '../theme';
 import type { ChartMetric } from '../types';
 import type { ColorResolver } from './colors';
 import { PAD, STALE_MS, TIME_STEPS_S, clamp } from './constants';
-import { emaPoints, splinePath } from './curve';
+import { emaPoints, splinePath, splineTangents } from './curve';
 import type { AgentStore } from './store';
 import { computeView, pointsFor, primaryBuffer } from './view';
 
@@ -177,6 +177,8 @@ export function drawFrame(
     drewAny = true;
 
     if (sp.length >= 2) {
+      // One set of tangents for both the fill and the stroke.
+      const tangents = splineTangents(sp);
       const fillKey = `f:${col.css}`;
       let fill = gcache.map.get(fillKey);
       if (!fill) {
@@ -189,7 +191,7 @@ export function drawFrame(
       ctx.fillStyle = fill;
       ctx.beginPath();
       ctx.moveTo(sp[0].x, sp[0].y);
-      splinePath(ctx, sp);
+      splinePath(ctx, sp, tangents);
       ctx.lineTo(tip.x, PAD.top + h);
       ctx.lineTo(sp[0].x, PAD.top + h);
       ctx.closePath();
@@ -210,7 +212,7 @@ export function drawFrame(
       ctx.lineJoin = 'round';
       ctx.beginPath();
       ctx.moveTo(sp[0].x, sp[0].y);
-      splinePath(ctx, sp);
+      splinePath(ctx, sp, tangents);
       ctx.stroke();
     }
 
