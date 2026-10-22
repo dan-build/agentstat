@@ -137,9 +137,43 @@ render is fine.
 
 ### Vercel AI SDK
 
-[`examples/vercel-ai-sdk.tsx`](./examples/vercel-ai-sdk.tsx) wires `useChat`
-(AI SDK v5+). It forwards the chat's lifecycle, streamed text and tool calls
-as events.
+`@dan-build/agentstat/ai-sdk` (AI SDK v5/v6; no dependency on `ai`, and it
+also runs on the server):
+
+```tsx
+import { createChatTracker, tapAiSdkStream } from '@dan-build/agentstat/ai-sdk';
+
+// useChat: call the tracker whenever messages or status change.
+const track = useMemo(() => createChatTracker(stream, 'chat'), [stream]);
+const { messages, status } = useChat();
+useEffect(() => track(messages, status), [track, messages, status]);
+
+// streamText: feed its full stream (or use createAiSdkTap per part).
+const result = streamText({ model, prompt, tools });
+await tapAiSdkStream(stream, 'writer', result.fullStream);
+```
+
+Text, reasoning and tool-call arguments count as output; a tool call is
+`waiting` until its result. Token counts are estimated from characters (~4
+per token); pass `{ countTokens }` for exact ones. Full example:
+[`examples/vercel-ai-sdk.tsx`](./examples/vercel-ai-sdk.tsx).
+
+### AG-UI
+
+`@dan-build/agentstat/ag-ui` maps AG-UI protocol events (no dependency on
+`@ag-ui/*`):
+
+```ts
+import { createAgUiTap } from '@dan-build/agentstat/ag-ui';
+
+const tap = createAgUiTap(stream, 'researcher');
+agent.subscribe({ onEvent: ({ event }) => tap(event) }); // or call tap() per event
+```
+
+Runs map to start/finish (`RUN_ERROR` counts an error), message, reasoning
+and tool-argument deltas to output, and a tool call is `waiting` from
+`TOOL_CALL_END` to `TOOL_CALL_RESULT` (or the end of the run, for tools your
+frontend runs).
 
 More integrations — LangChain, WebSocket/SSE, MCP — are in the
 [integration guide](https://agentstat.sdaniel.cc/docs/real-data-integration/).
