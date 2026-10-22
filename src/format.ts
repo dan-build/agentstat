@@ -57,6 +57,7 @@ export const formatTick = (msBeforeEnd: number): string => {
 const STATUS_LABEL: Record<AgentStatus, string> = {
   active: 'Active',
   thinking: 'Thinking',
+  waiting: 'Waiting',
   stuck: 'Stuck',
   complete: 'Complete',
   hallucinating: 'Hallucinating',

@@ -18,7 +18,16 @@ import { isDarkColor, resolveCssVar } from './color';
 import { tokensFor, FONT_SANS, FONT_MONO, type ThemeMode, type ThemeTokens } from './theme';
 import { mulberry32, SIM_TICK_MS, type Rng } from './simulator';
 import { formatRate, formatStatus } from './format';
-import type { Agent, AgentDataPoint, AgentSample, AgentStatus, ChartMetric, HealthMetrics } from './types';
+import type {
+  Agent,
+  AgentDataPoint,
+  AgentEvent,
+  AgentSample,
+  AgentStatus,
+  AgentStreamStats,
+  ChartMetric,
+  HealthMetrics,
+} from './types';
 import { DEFAULT_CAP, HEALTH_TICK_MS, HIT_RADIUS, PAD, clamp } from './core/constants';
 import { emaPoints } from './core/curve';
 import { AgentStore, type RowSnapshot } from './core/store';
@@ -147,6 +156,14 @@ export interface AgentStatRef {
   updateAgent(id: string, sample: AgentSample): void;
   /** Positional form, kept for compatibility. */
   updateAgent(id: string, tokensRate: number, progress: number, status: AgentStatus): void;
+  /**
+   * Forward a raw stream event (tokens, tool calls, start/finish); AgentStat
+   * derives rate, TTFT, inter-token latency and status. Use this or the
+   * `tokensRate` of `updateAgent` for an agent, not both.
+   */
+  push(id: string, event: AgentEvent): void;
+  /** Token count, TTFT, inter-token latency and open tool, from `push` events. */
+  getStats: (id: string) => AgentStreamStats | undefined;
   getHealth: (id: string) => HealthMetrics | undefined;
   /** Anomalies currently active for an agent (empty if none or detection off). */
   getAnomalies: (id: string) => Anomaly[];
@@ -422,6 +439,8 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
         const sample = typeof a === 'object' && a !== null ? a : { tokensRate: a, progress, status };
         store.ingest(id, sample, performance.now());
       }) as AgentStatRef['updateAgent'],
+      push: (id, event) => store.push(id, event, performance.now()),
+      getStats: (id) => store.getStats(id, performance.now()),
       getHealth: (id) => store.getHealth(id),
       getAnomalies: (id) => store.getAnomalies(id),
       getLiveMetrics: (id) => store.getLiveMetrics(id),

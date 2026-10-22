@@ -4,11 +4,12 @@
 //
 //   npm i ai @ai-sdk/react
 //
-// The token rate is measured from the streamed text over a sliding 1 s window
-// (~4 characters per token for English — replace with real counts if your
-// server sends them as message metadata). It keeps reporting on a timer while
-// a response is in flight, so a stream that goes quiet shows up as a falling
-// rate and, with `anomalyDetection`, as a stall.
+// Forwards the chat's lifecycle, streamed text and tool calls as AgentStat
+// events; AgentStat derives the token rate, time to first token and status
+// (thinking → active → waiting on a tool → … → complete); a failed request
+// or tool call counts an error. Token counts are estimated from streamed
+// characters (~4 per token for English — replace with real counts if your
+// server sends them as message metadata).
 //
 // This file isn't type-checked in the AgentStat repo because `ai` isn't one
 // of its dependencies.
@@ -16,57 +17,62 @@
 
 import { useEffect, useMemo, useRef } from 'react';
 import { useChat } from '@ai-sdk/react';
-import { AgentStat, createAgent, type AgentStatRef, type AgentStatus } from '@dan-build/agentstat';
+import { AgentStat, createAgent, type AgentStatRef } from '@dan-build/agentstat';
 
 const AGENT_ID = 'chat';
-const RATE_WINDOW_MS = 1000;
 const CHARS_PER_TOKEN = 4;
 
-// useChat status → AgentStat status.
-const STATUS: Record<string, AgentStatus> = {
-  submitted: 'thinking', // request sent, waiting for the first token
-  streaming: 'active',
-  ready: 'complete',
-  error: 'stuck', // closest "needs attention" state
-};
+// AI SDK v5/v6 UI message parts, as far as this example reads them.
+// Tool states in which the call has started but not finished.
+const OPEN = new Set(['input-available', 'approval-requested', 'approval-responded']);
+type Part = { type: string; text?: string; toolCallId?: string; toolName?: string; state?: string };
 
 export default function MonitoredChat() {
   const statRef = useRef<AgentStatRef>(null);
   const agents = useMemo(() => [createAgent(AGENT_ID, 'Assistant')], []);
   const { messages, status, sendMessage } = useChat();
 
-  // Approximate tokens streamed so far in the latest assistant message.
+  // One effect, in stream order: output and tool calls of the latest
+  // assistant message (as deltas, text before each tool event that follows
+  // it), then the lifecycle — so `finish` is never sent before the last tokens.
+  const seen = useRef({ id: '', chars: 0, tools: new Map<string, string>(), status: '' });
   const last = messages[messages.length - 1];
-  const streamedChars =
-    last?.role === 'assistant'
-      ? last.parts.reduce((n, p) => n + (p.type === 'text' ? p.text.length : 0), 0)
-      : 0;
-  const tokensRef = useRef(0);
-  tokensRef.current = streamedChars / CHARS_PER_TOKEN;
-
-  // Report status changes as they happen.
   useEffect(() => {
-    statRef.current?.updateAgent(AGENT_ID, {
-      status: STATUS[status] ?? 'active',
-      ...(status === 'ready' || status === 'error' ? { tokensRate: 0 } : {}),
-    });
-  }, [status]);
-
-  // While a response is in flight, sample the rate every 250 ms.
-  useEffect(() => {
-    if (status !== 'submitted' && status !== 'streaming') return;
-    const samples: { t: number; tokens: number }[] = [];
-    const id = setInterval(() => {
-      const t = performance.now();
-      samples.push({ t, tokens: tokensRef.current });
-      while (samples.length > 1 && t - samples[0].t > RATE_WINDOW_MS) samples.shift();
-      const first = samples[0];
-      const dt = (t - first.t) / 1000;
-      const rate = dt > 0 ? (tokensRef.current - first.tokens) / dt : 0;
-      statRef.current?.updateAgent(AGENT_ID, { tokensRate: Math.max(0, rate) });
-    }, 250);
-    return () => clearInterval(id);
-  }, [status]);
+    const ref = statRef.current;
+    if (!ref) return;
+    const s = seen.current;
+    if (status === 'submitted' && s.status !== 'submitted') ref.push(AGENT_ID, { type: 'start' });
+    if (last?.role === 'assistant') {
+      if (s.id !== last.id) Object.assign(s, { id: last.id, chars: 0, tools: new Map() });
+      let chars = 0;
+      const flush = () => {
+        if (chars > s.chars) ref.push(AGENT_ID, { type: 'tokens', count: (chars - s.chars) / CHARS_PER_TOKEN });
+        s.chars = Math.max(s.chars, chars);
+      };
+      for (const p of last.parts as Part[]) {
+        if (p.type === 'text' || p.type === 'reasoning') chars += p.text?.length ?? 0;
+        if (!p.toolCallId || (!p.type.startsWith('tool-') && p.type !== 'dynamic-tool')) continue;
+        const name = p.toolName ?? p.type.slice('tool-'.length);
+        const state = p.state ?? '';
+        const prev = s.tools.get(p.toolCallId);
+        if (prev === state) continue;
+        s.tools.set(p.toolCallId, state);
+        flush();
+        const done = state === 'output-available' || state === 'output-error' || state === 'output-denied';
+        // A call can go from streaming its input to done between two renders.
+        if (!OPEN.has(prev ?? '') && (OPEN.has(state) || done)) {
+          ref.push(AGENT_ID, { type: 'tool-start', name });
+        }
+        if (done) ref.push(AGENT_ID, { type: 'tool-end', name, error: state === 'output-error' });
+      }
+      flush();
+    }
+    if (status !== s.status) {
+      if (status === 'error') ref.push(AGENT_ID, { type: 'error' });
+      if (status === 'ready' || status === 'error') ref.push(AGENT_ID, { type: 'finish' });
+    }
+    s.status = status;
+  }, [last, status]);
 
   return (
     <div>

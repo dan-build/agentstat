@@ -19,8 +19,10 @@ import { simStep, type Rng, type SimState } from '../simulator';
 import {
   AGENT_STATUSES,
   type Agent,
+  type AgentEvent,
   type AgentSample,
   type AgentStatus,
+  type AgentStreamStats,
   type HealthMetrics,
 } from '../types';
 import {
@@ -67,6 +69,43 @@ export interface StoreOptions {
 
 // Active time the slow reference rate needs before the detectors may use it.
 const REFERENCE_WARMUP_MS = 10_000;
+
+// Event ingest: the rate is tokens over a trailing window of about three
+// typical gaps between token events (so batched delivery reads as a steady
+// rate), between these bounds; sampled at most every SAMPLE_MS.
+const RATE_WINDOW_MS = [1_000, 4_000] as const;
+const SAMPLE_MS = 100;
+// Statuses in which quiet output is expected; leaving one starts a stretch of
+// work, in which quiet output can be a stall.
+const RESTING = new Set<AgentStatus>(['waiting', 'complete']);
+// Once an agent's events stop, health ticks sample its rate (zero) at most
+// this often.
+const STREAM_TICK_MS = 250;
+
+/** Per-agent state for agents fed with `push` events. */
+type Stream = {
+  /** Token events in the rate window, as flat [t, count, t, count, …]. */
+  win: number[];
+  total: number;
+  /** Last cumulative `total` reported, to turn totals into deltas. */
+  lastTotal?: number;
+  /** Latest time applied (events are clamped to be monotonic). */
+  t: number;
+  /** When the last event arrived (store clock), whatever its `time`. */
+  arrived: number;
+  lastSample: number;
+  /** Time of the last `start`/`tool-end` still waiting for its first token. */
+  ttftFrom: number | null;
+  ttft: number | null;
+  /** Previous token event of the current streaming stretch (null across pauses). */
+  lastTok: number | null;
+  /** Estimated start of the current streaming stretch (the rate window can't reach earlier). */
+  from: number;
+  /** Token events in the current stretch. */
+  n: number;
+  itl: number | null;
+  tools: string[];
+};
 
 type Episode = {
   since: number;
@@ -126,8 +165,15 @@ export class AgentStore {
   private _refActiveMs = new Map<string, number>();
   // Agents whose caller has reported a status at least once.
   private _statusReported = new Set<string>();
+  // When each agent's current status began, and when its current stretch of
+  // work (since it last left `waiting`/`complete`) began.
+  private _statusSince = new Map<string, number>();
+  private _workSince = new Map<string, number>();
+  private _streams = new Map<string, Stream>();
   // History the detectors need for the current config.
   private _detectorHistoryMs = DETECTOR_HISTORY_MS;
+  // Rate at/below which output counts as none (the detectors' current config).
+  private _idleRate = 0.5;
   private _lastTick = 0;
   private _listeners = new Set<() => void>();
 
@@ -163,6 +209,8 @@ export class AgentStore {
         this.progress.set(a.id, series.progress);
         this.tokens.set(a.id, series.tokens);
         this.status.set(a.id, series.status);
+        this._statusSince.set(a.id, now);
+        this._workSince.set(a.id, now);
       } else {
         const prev = prevProps.get(a.id);
         if (!prev || prev.name !== a.name) rec.name = a.name ?? a.id;
@@ -204,6 +252,9 @@ export class AgentStore {
     this._refRate.delete(id);
     this._refActiveMs.delete(id);
     this._statusReported.delete(id);
+    this._statusSince.delete(id);
+    this._workSince.delete(id);
+    this._streams.delete(id);
     this._sim.delete(id);
   }
 
@@ -230,6 +281,26 @@ export class AgentStore {
     const winS = this.options.windowSeconds;
     const view = (winS !== undefined && winS > 0 ? winS * 1000 : DEFAULT_VIEW_MS) * 1.5;
     return Math.max(view, this._detectorHistoryMs);
+  }
+
+  /**
+   * Record a status change at `t` (no-op if unchanged). `output`: the agent
+   * is producing output as of this change.
+   */
+  private _setStatus(rec: AgentRecord, status: AgentStatus, t: number, output = false): void {
+    this._statusReported.add(rec.id);
+    const prev = rec.current.status;
+    if (status === prev) return;
+    rec.current.status = status;
+    this._statusSince.set(rec.id, t);
+    // A new stretch of work: after resting, or when thinking ends in output
+    // (quiet thinking is judged by its own limit, not counted against
+    // `active`). Flipping thinking → active without output doesn't reset it.
+    if ((RESTING.has(prev) || (prev === 'thinking' && output)) && !RESTING.has(status)) {
+      this._workSince.set(rec.id, t);
+    }
+    this.status.get(rec.id)?.record(t, status);
+    if (this.pausedAt === null) this.dirty = true;
   }
 
   private _pushSample(rec: AgentRecord, now: number): void {
@@ -277,7 +348,6 @@ export class AgentStore {
       status = undefined;
     }
 
-    if (status !== undefined) this._statusReported.add(id);
     if (status === 'stuck' || status === 'hallucinating') this._locked.add(id);
     else if (status !== undefined) this._locked.delete(id);
 
@@ -293,12 +363,186 @@ export class AgentStore {
       if (log.length > LATENCY_HISTORY) log.splice(0, log.length - LATENCY_HISTORY);
       this._latency.set(id, log);
     }
-    if (status !== undefined) {
-      cur.status = status;
-      this.status.get(id)?.record(now, status);
-      if (this.pausedAt === null) this.dirty = true;
-    }
+    // Output only if this sample reports a real rate (not noise, not stale).
+    if (status !== undefined) this._setStatus(rec, status, now, tokensRate !== undefined && tokensRate > this._idleRate);
     if (tokensRate !== undefined || progress !== undefined) this._pushSample(rec, now);
+  }
+
+  /**
+   * Apply a stream event: derive rate, TTFT, inter-token latency and status.
+   * Malformed events are dropped with a warning.
+   */
+  push(id: string, e: AgentEvent, now: number): void {
+    const rec = this.byId.get(id);
+    if (!rec) {
+      warnOnce(`unknown:${id}`, `push("${id}") ignored: no agent with that id is in the agents prop.`);
+      return;
+    }
+    const bad = (what: string) => warnOnce(`${id}:ev:${what}`, `push("${id}"): ignored ${what}.`);
+    if (!e || typeof e !== 'object') return bad('a non-object event');
+    let s = this._streams.get(id);
+    if (!s) {
+      s = { win: [], total: 0, t: -Infinity, arrived: now, lastSample: -Infinity, ttftFrom: null, ttft: null, lastTok: null, from: -Infinity, n: 0, itl: null, tools: [] };
+      this._streams.set(id, s);
+    }
+    // Never in the future, and never before anything already recorded for
+    // the agent (events, samples, status changes).
+    const floor = Math.max(s.t, this._statusSince.get(id) ?? -Infinity, this.tokens.get(id)?.lastT ?? -Infinity);
+    const t = Math.min(now, Math.max(floor, typeof e.time === 'number' && Number.isFinite(e.time) ? e.time : now));
+    s.t = t;
+    s.arrived = now;
+    const cur = rec.current;
+    const error = () => {
+      cur.errorCount = (cur.errorCount ?? 0) + 1;
+    };
+    // A status set with updateAgent ('stuck', 'hallucinating') holds until
+    // updateAgent changes it.
+    const setStatus = (st: AgentStatus, output = false) => {
+      if (!this._locked.has(id)) this._setStatus(rec, st, t, output);
+    };
+    // Before a hand-off clears the window: sample a held-back first chunk.
+    if (e.type === 'start' || e.type === 'tool-start' || e.type === 'finish') {
+      if (s.win.length && s.lastSample < s.win[s.win.length - 2]) this._sampleStream(rec, s, t, false);
+    }
+    switch (e.type) {
+      case 'start':
+        s.tools = [];
+        s.ttftFrom = t;
+        s.lastTok = null;
+        s.win = [];
+        setStatus('thinking');
+        break;
+      case 'tokens': {
+        const { count, total } = e;
+        let n: number;
+        if (typeof total === 'number' && Number.isFinite(total) && total >= 0) {
+          // The first total only sets the starting point (the agent may have
+          // been running before the chart); a smaller one starts a new count.
+          n = s.lastTotal === undefined ? 0 : total >= s.lastTotal ? total - s.lastTotal : total;
+          s.lastTotal = total;
+        } else if (typeof count === 'number' && Number.isFinite(count) && count >= 0) {
+          n = count;
+        } else {
+          return bad('a tokens event without a finite count or total');
+        }
+        if (n === 0) break;
+        // A gap longer than any rate window is a pause, not streaming.
+        if (s.lastTok !== null && t - s.lastTok > RATE_WINDOW_MS[1]) s.lastTok = null;
+        // A new stretch: its first chunk was produced over about one
+        // inter-token gap (or since the request, if no gap is known yet), not
+        // over the whole rate window.
+        if (s.lastTok === null) {
+          const span = s.itl ?? (s.ttftFrom !== null ? t - s.ttftFrom : RATE_WINDOW_MS[0]);
+          s.from = t - clamp(span, SAMPLE_MS, RATE_WINDOW_MS[1]);
+          s.n = 0;
+        } else if (++s.n === 1 && s.itl === null) {
+          // The second chunk shows the real gap: re-anchor the stretch on it.
+          s.from = s.lastTok - clamp(t - s.lastTok, SAMPLE_MS, RATE_WINDOW_MS[1]);
+        }
+        s.win.push(t, n);
+        s.total += n;
+        if (s.ttftFrom !== null) {
+          s.ttft = t - s.ttftFrom;
+          s.ttftFrom = null;
+          // TTFT is the latency of the model call: it feeds latencyTrend.
+          this.ingest(id, { latencyMs: s.ttft }, now);
+        }
+        if (s.lastTok !== null) {
+          const gap = t - s.lastTok;
+          s.itl = s.itl === null ? gap : s.itl + (gap - s.itl) * 0.2;
+        }
+        s.lastTok = t;
+        // Output while a tool call is open (streamed tool input) doesn't end the wait.
+        setStatus(s.tools.length ? 'waiting' : 'active', true);
+        // A lone first chunk with no known gap can't be read as a rate yet:
+        // the next chunk shows the gap, or a health tick samples it as a
+        // whole response (tokens over the time since the request).
+        if (s.itl === null && s.n === 0) return;
+        break;
+      }
+      case 'tool-start':
+        s.tools.push(typeof e.name === 'string' ? e.name : '');
+        // The model handed off: its output has stopped.
+        s.lastTok = null;
+        s.win = [];
+        setStatus('waiting');
+        break;
+      case 'tool-end': {
+        if (e.error) error();
+        // Nothing open: a duplicate or stray end changes nothing.
+        if (!s.tools.length) break;
+        let i = s.tools.lastIndexOf(typeof e.name === 'string' ? e.name : '');
+        if (i < 0) i = s.tools.length - 1;
+        s.tools.splice(i, 1);
+        if (!s.tools.length) {
+          s.ttftFrom = t;
+          s.lastTok = null;
+          setStatus('thinking');
+        }
+        break;
+      }
+      case 'error':
+        error();
+        break;
+      case 'finish':
+        s.tools = [];
+        s.win = [];
+        s.ttftFrom = null;
+        s.lastTok = null;
+        setStatus('complete');
+        break;
+      default:
+        return bad(`unknown event type "${String((e as { type?: unknown }).type)}"`);
+    }
+    this._sampleStream(rec, s, t, e.type === 'tokens');
+  }
+
+  /**
+   * Push the event-derived rate as a sample at `t`. Token events are sampled
+   * at most every SAMPLE_MS (the window keeps every token); status changes
+   * and forced samples always are.
+   */
+  private _sampleStream(rec: AgentRecord, s: Stream, t: number, throttle: boolean): void {
+    if (throttle && t - s.lastSample < SAMPLE_MS) return;
+    const W = this._window(s, t);
+    let i = 0;
+    while (i < s.win.length && s.win[i] <= t - W) i += 2;
+    if (i) s.win.splice(0, i);
+    let sum = 0;
+    for (let j = 1; j < s.win.length; j += 2) sum += s.win[j];
+    rec.current.tokensRate = (sum * 1000) / W;
+    s.lastSample = t;
+    this._pushSample(rec, t);
+  }
+
+  /** Rate window at `t`: ~3 inter-token gaps, never reaching before the stretch. */
+  private _window(s: Stream, t: number): number {
+    const base = s.itl === null ? RATE_WINDOW_MS[1] : clamp(3 * s.itl, RATE_WINDOW_MS[0], RATE_WINDOW_MS[1]);
+    return Math.max(SAMPLE_MS, Math.min(base, t - s.from));
+  }
+
+  /**
+   * Health-tick sampling of an event-fed agent: once its events stop, its
+   * rate falls to zero when the last tokens leave the window. That sample is
+   * placed at that moment, but only taken once no event has arrived for the
+   * window plus a tick, so batched delivery keeps its event times.
+   */
+  private _tickStream(rec: AgentRecord, s: Stream, now: number): void {
+    if (s.win.length) {
+      const last = s.win[s.win.length - 2];
+      if (s.lastSample < last) {
+        // Tokens not sampled yet (a held-back first chunk): sample them now.
+        if (now - s.arrived >= STREAM_TICK_MS) this._sampleStream(rec, s, s.t, false);
+        return;
+      }
+      const W = this._window(s, last);
+      if (now - s.arrived < W + STREAM_TICK_MS) return;
+      s.t = Math.min(now, Math.max(s.t, last + W));
+      this._sampleStream(rec, s, s.t, false);
+    } else if (now - s.lastSample >= STREAM_TICK_MS) {
+      s.t = Math.max(s.t, now);
+      this._sampleStream(rec, s, now, false);
+    }
   }
 
   // ── Demo simulator ─────────────────────────────────────────────────────
@@ -316,11 +560,7 @@ export class AgentStore {
       rec.current.progress = step.progress;
       rec.current.confidenceScore = step.confidenceScore;
       this._simTouched.add(rec.id);
-      this._statusReported.add(rec.id);
-      if (step.status !== rec.current.status) {
-        rec.current.status = step.status;
-        this.status.get(rec.id)?.record(now, step.status);
-      }
+      this._setStatus(rec, step.status, now, step.tokensRate > this._idleRate);
       this._pushSample(rec, now);
     }
   }
@@ -345,6 +585,7 @@ export class AgentStore {
    */
   healthTick(now: number, detectOn: boolean, cfg: AnomalyConfig, emit: (e: StoreEvent) => void): void {
     for (const ev of this._pendingEvents.splice(0)) emit(ev);
+    this._idleRate = cfg.stallRateThreshold;
     // Keep enough history for the slowest detector rule in this config.
     this._detectorHistoryMs = Math.max(
       DETECTOR_HISTORY_MS,
@@ -355,6 +596,9 @@ export class AgentStore {
     const dt = this._lastTick ? Math.max(0, now - this._lastTick) : 0;
     this._lastTick = now;
     for (const rec of this.list) {
+      // Event-fed agents: no event is information too (the rate decays).
+      const st = this._streams.get(rec.id);
+      if (st) this._tickStream(rec, st, now);
       const tBuf = this.tokens.get(rec.id);
       let found: Anomaly[] = [];
       if (detectOn && tBuf) {
@@ -376,15 +620,22 @@ export class AgentStore {
           }
         }
         if (n) {
-          this._refActiveMs.set(rec.id, (this._refActiveMs.get(rec.id) ?? 0) + (dt || 500));
-          const prev = this._refRate.get(rec.id);
-          const a = prev === undefined ? 1 : 1 - Math.exp(-(dt || 500) / 300_000);
-          this._refRate.set(rec.id, prev === undefined ? sum / n : prev + (sum / n - prev) * a);
+          const activeMs = (this._refActiveMs.get(rec.id) ?? 0) + (dt || 500);
+          this._refActiveMs.set(rec.id, activeMs);
+          const prev = this._refRate.get(rec.id) ?? 0;
+          // A plain mean of the active output during warm-up (so the first
+          // tick, often a ramp, can't anchor it), then the slow average.
+          const a =
+            activeMs <= REFERENCE_WARMUP_MS ? (dt || 500) / activeMs : 1 - Math.exp(-(dt || 500) / 300_000);
+          this._refRate.set(rec.id, prev + (sum / n - prev) * a);
         }
         found = detectAnomalies(tokens, changes, rec.current.status, now, cfg, open, {
           // Only once it reflects real activity, not a start-up ramp.
           referenceRate: (this._refActiveMs.get(rec.id) ?? 0) >= REFERENCE_WARMUP_MS ? this._refRate.get(rec.id) : undefined,
           statusReported: this._statusReported.has(rec.id),
+          statusSince: this._statusSince.get(rec.id),
+          workSince: this._workSince.get(rec.id),
+          waitingOn: st?.tools[st.tools.length - 1] || undefined,
         });
         const prev = this.anomalies.get(rec.id) ?? [];
         if (found.length || prev.length) this.dirty = true;
@@ -507,6 +758,19 @@ export class AgentStore {
 
   getAnomalies(id: string): Anomaly[] {
     return (this.anomalies.get(id) ?? []).map((a) => ({ ...a }));
+  }
+
+  getStats(id: string, now: number): AgentStreamStats | undefined {
+    const rec = this.byId.get(id);
+    if (!rec) return undefined;
+    const s = this._streams.get(id);
+    return {
+      totalTokens: s?.total ?? 0,
+      ttftMs: s?.ttft ?? null,
+      interTokenMs: s?.itl ?? null,
+      tool: s?.tools.length ? s.tools[s.tools.length - 1] : null,
+      statusMs: Math.max(0, now - (this._statusSince.get(id) ?? now)),
+    };
   }
 
   getLiveMetrics(id: string): LiveValues | undefined {

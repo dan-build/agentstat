@@ -7,7 +7,7 @@ import { AgentStore } from '../../src/core/store';
 import { DEFAULT_ANOMALY_CONFIG, type AnomalyConfig, type AnomalyKind } from '../../src/anomaly';
 import { HEALTH_TICK_MS } from '../../src/core/constants';
 import { mulberry32, type Rng } from '../../src/simulator';
-import type { Agent, AgentSample } from '../../src/types';
+import type { Agent, AgentEvent, AgentSample } from '../../src/types';
 
 /** Alerts up to this long after a label's end still count for it. */
 export const TOLERANCE_MS = 3_000;
@@ -36,8 +36,13 @@ export interface Scenario {
   batch?: number;
   cfg?: Partial<AnomalyConfig>;
   labels: Label[];
-  /** Called every period per agent; return null to send nothing (dropped stream). */
-  step: (tS: number, agent: number, rng: Rng) => AgentSample | null;
+  /**
+   * Called every period per agent. Return a sample (`updateAgent`), a list of
+   * stream events (`push`, applied in order; an event's `time` is ms from
+   * scenario start and must lie within the current period), or null to send
+   * nothing (dropped stream).
+   */
+  step: (tS: number, agent: number, rng: Rng) => AgentSample | AgentEvent[] | null;
 }
 
 export interface Alert {
@@ -112,7 +117,11 @@ export function runScenario(sc: Scenario, set = 'default'): ScenarioResult {
       for (let i = 0; i < n; i++) {
         for (let b = 0; b < (sc.batch ?? 1); b++) {
           const s = sc.step(ms / 1000, i, rng);
-          if (s) store.ingest(`a${i}`, s, now);
+          if (Array.isArray(s)) {
+            for (const e of s) {
+              store.push(`a${i}`, e.time === undefined ? e : { ...e, time: T0 + e.time }, now);
+            }
+          } else if (s) store.ingest(`a${i}`, s, now);
         }
       }
     }

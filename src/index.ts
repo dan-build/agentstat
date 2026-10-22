@@ -7,6 +7,8 @@ export type { AgentStatProps, AgentStatRef } from './AgentStat';
 export type {
   Agent,
   AgentDataPoint,
+  AgentEvent,
+  AgentStreamStats,
   AgentSample,
   AgentStatus,
   HealthMetrics,

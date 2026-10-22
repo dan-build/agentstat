@@ -56,6 +56,15 @@ export interface AgentContext {
    * typing, so only a stream that goes completely silent counts as a stall.
    */
   statusReported?: boolean;
+  /** When the current status began (same clock as samples). */
+  statusSince?: number;
+  /**
+   * When the agent last left `waiting` or `complete`. A stall can't start
+   * earlier: quiet output was expected before it.
+   */
+  workSince?: number;
+  /** What a `waiting` agent is waiting on (e.g. a tool name), for the message. */
+  waitingOn?: string;
 }
 
 /** What detectors with memory need to know about an episode in progress. */
@@ -76,6 +85,11 @@ export interface AnomalyConfig {
    * legitimately emit nothing while they think, so this is much longer.
    */
   thinkingStallMs: number;
+  /**
+   * Time (ms) in `waiting` (a tool call, subagents, a person) before flagging
+   * a stall. Waiting is quiet by design, so only its length counts. 0 = never.
+   */
+  waitingStallMs: number;
   /**
    * A spike is output reaching this multiple of the agent's usual peak (the
    * 95th percentile of its active rate over the baseline window), averaged
@@ -113,6 +127,7 @@ export const DEFAULT_ANOMALY_CONFIG: AnomalyConfig = {
   stallRateThreshold: 0.5,
   stallDurationMs: 10_000,
   thinkingStallMs: 30_000,
+  waitingStallMs: 300_000,
   spikeRatio: 1.5,
   spikeMinIncrease: 3,
   spikeMinSamples: 10,
@@ -121,7 +136,7 @@ export const DEFAULT_ANOMALY_CONFIG: AnomalyConfig = {
   spikeMaxEpisodeMs: 600_000,
   thrashChangeCount: 4,
   thrashWindowMs: 4_000,
-  thrashBenignStatuses: ['active', 'thinking', 'complete'],
+  thrashBenignStatuses: ['active', 'thinking', 'waiting', 'complete'],
 };
 
 /** Minimum length of the "recent" window whose output is compared. */
@@ -211,7 +226,9 @@ function activeCutoff(tokens: TokenSample[], cfg: AnomalyConfig, ctx?: AgentCont
 /**
  * Detect a STALL: the agent claims to be working but isn't producing output.
  * While `active` that means no real output for `stallDurationMs`; while
- * `thinking`, for `thinkingStallMs` (reasoning is allowed to be quiet).
+ * `thinking`, for `thinkingStallMs` (reasoning is allowed to be quiet). While
+ * `waiting`, output isn't expected at all: only a wait longer than
+ * `waitingStallMs` (from `ctx.statusSince`) is a stall.
  *
  * "No real output" is judged relative to the agent: an average rate at or
  * below 5% of its recent high (and at least `stallRateThreshold`), so a
@@ -226,6 +243,18 @@ export function detectStall(
   cfg: AnomalyConfig,
   ctx?: AgentContext
 ): Anomaly | null {
+  if (currentStatus === 'waiting') {
+    const since = ctx?.statusSince;
+    const ms = since === undefined ? 0 : now - since;
+    if (!(cfg.waitingStallMs > 0) || ms < cfg.waitingStallMs) return null;
+    return {
+      kind: 'stall',
+      severity: ms >= cfg.waitingStallMs * 2 ? 'critical' : 'warning',
+      t: since as number,
+      message: `waiting${ctx?.waitingOn ? ` on ${ctx.waitingOn}` : ''} for ${Math.round(ms / 1000)}s`,
+      value: 0,
+    };
+  }
   const limit =
     currentStatus === 'active'
       ? cfg.stallDurationMs
@@ -235,13 +264,15 @@ export function detectStall(
   if (!(limit > 0) || tokens.length === 0) return null;
   const severity = (ms: number): AnomalySeverity => (ms >= limit * 2 ? 'critical' : 'warning');
 
+  const workSince = ctx?.workSince ?? -Infinity;
   const last = tokens[tokens.length - 1];
-  const silentMs = now - last.t;
+  const silentFrom = Math.max(last.t, workSince);
+  const silentMs = now - silentFrom;
   if (silentMs >= limit) {
     return {
       kind: 'stall',
       severity: severity(silentMs),
-      t: last.t,
+      t: silentFrom,
       message: `no data for ${Math.round(silentMs / 1000)}s while ${currentStatus}`,
       value: 0,
     };
@@ -263,6 +294,7 @@ export function detectStall(
     else if (tokens[i].v > idleLevel * 4) break; // real output: the stall can't start earlier
   }
   if (!Number.isFinite(startT)) return null;
+  startT = Math.max(startT, workSince);
   const sustainedMs = now - startT;
   if (sustainedMs < limit) return null;
   return {

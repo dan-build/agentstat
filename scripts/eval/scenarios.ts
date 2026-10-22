@@ -12,6 +12,8 @@ import type { AgentSample, AgentStatus } from '../../src/types';
 import { gauss, runScenario, TOLERANCE_MS, type Scenario, type ScenarioResult } from './harness';
 import { ADVERSARIAL } from './adversarial';
 import { HOLDOUT } from './holdout';
+import { EVENTS } from './events';
+import { HOLDOUT2 } from './holdout2';
 
 export { DEFAULT_ANOMALY_CONFIG, TOLERANCE_MS };
 
@@ -182,5 +184,7 @@ export function runAll(): ScenarioResult[] {
     ...SCENARIOS.map((sc) => runScenario(sc, 'original')),
     ...ADVERSARIAL.map((sc) => runScenario(sc, 'adversarial')),
     ...HOLDOUT.map((sc) => runScenario(sc, 'holdout')),
+    ...EVENTS.map((sc) => runScenario(sc, 'events')),
+    ...HOLDOUT2.map((sc) => runScenario(sc, 'holdout2')),
   ];
 }
