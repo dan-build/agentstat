@@ -18,8 +18,16 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
   A callback that throws no longer stops other agents' state from updating
   during that tick.
 
+- **Faster, leaner sample buffers.** Samples are stored in typed-array ring
+  buffers (16 B per sample, shrinking when the window shrinks). Long windows
+  are downsampled with M4, which keeps every column's minimum and maximum,
+  so isolated spikes and dips can't disappear (the previous LTTB downsampler
+  could drop them). At 50 agents, 15-minute windows and 20 Hz, the slowest
+  frame went from ~200 ms to under 15 ms and memory from 170 MB to 50 MB.
+
 ### Fixed
 
+- **A paused view no longer changes** as new data arrives in its window.
 - **The screen-reader summary** is present in the first render and in
   server-rendered markup.
 - **First-render rows are validated** like later updates: duplicate ids are
