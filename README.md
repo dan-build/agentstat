@@ -88,6 +88,36 @@ chart's stream data over — the agents it added, and everything recorded for
 `agents`-prop agents it fed, including what you sent them through the ref — and
 replays the new one's history.
 
+### From a server
+
+When the agents run on a server (a route handler, a worker), stream their
+events to the browser over Server-Sent Events with
+`@dan-build/agentstat/sse`:
+
+```ts
+// server — e.g. app/api/agents/route.ts (any Fetch-API runtime)
+import { createAgentStream } from '@dan-build/agentstat';
+import { createSseHandler } from '@dan-build/agentstat/sse';
+
+export const stream = createAgentStream(); // feed it with the adapters below
+export const GET = createSseHandler(stream);
+```
+
+```tsx
+// browser
+import { connectSse } from '@dan-build/agentstat/sse';
+
+const source = useMemo(() => connectSse('/api/agents'), []);
+<AgentStat source={source} metric="tokens" anomalyDetection />
+```
+
+A chart that connects gets the stream's last 5 minutes, then live events; it
+reconnects after a drop and resumes where it stopped. Event times are
+corrected for the difference between the server's clock and the browser's.
+The endpoint exposes your agents' telemetry, so protect it like any route:
+`createSseHandler(request => …)` can pick a stream per request (return
+`undefined` for a 404).
+
 ### Stream events
 
 `push` takes raw events, and AgentStat derives the token rate, time to first

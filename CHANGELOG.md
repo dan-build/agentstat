@@ -46,6 +46,13 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
     chunks.
   - **`@dan-build/agentstat/ag-ui`**: `createAgUiTap` for AG-UI protocol
     events.
+  - **`@dan-build/agentstat/sse`**: `createSseHandler` streams an agent
+    stream as Server-Sent Events from any Fetch-API server (Next.js route
+    handlers, Hono, Bun, Deno, Workers), optionally picking a stream per
+    request; `connectSse` is the browser-side source for `<AgentStat
+    source>`. History is replayed on connect, reconnects resume, a
+    restarted server is replayed in full, and event times are corrected for
+    clock skew between server and browser.
   - **`@dan-build/agentstat/langchain`** (LangChain.js / LangGraph.js):
     `createLangChainCallbacks` (a callback handler), and
     `tapLangChainStream` / `createLangChainTap` for `streamEvents` v2. An

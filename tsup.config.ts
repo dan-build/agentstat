@@ -32,6 +32,6 @@ export default defineConfig([
     ...shared,
     // Adapters: no React and no client directive, so they also run on the
     // server (route handlers, workers).
-    entry: ['src/ai-sdk.ts', 'src/ag-ui.ts', 'src/langchain.ts'],
+    entry: ['src/ai-sdk.ts', 'src/ag-ui.ts', 'src/langchain.ts', 'src/sse.ts'],
   },
 ]);
