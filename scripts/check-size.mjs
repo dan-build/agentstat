@@ -9,8 +9,10 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
 // Raise deliberately, with a reason in the commit. History (consumer-bundled
-// min+gzip): 0.4.1 17.3 KB → 0.5 store/renderer split 17.8 KB.
-const BUDGETS = { 'dist/index.js': 18_000, 'dist/index.cjs': 18_500 };
+// min+gzip): 0.4.1 17.3 KB → store/renderer split 17.8 KB → typed-array ring
+// buffer + M4 downsampling 18.0 KB (buffer recompute 4–6× faster, 3.4× less
+// memory; see scripts/bench-buffer.mjs).
+const BUDGETS = { 'dist/index.js': 18_500, 'dist/index.cjs': 19_000 };
 const TREESHAKE_BUDGET = 2_000;
 
 let failed = false;

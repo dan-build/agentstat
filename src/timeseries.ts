@@ -9,10 +9,11 @@
 //   - O(1) amortized append.
 //   - Time-based eviction: drop samples older than a retention horizon.
 //   - Window slicing: return only samples within the last `windowMs`.
-//   - Downsampling: when a sliced window has far more points than the canvas has
-//     pixels, reduce to a visually faithful subset via LTTB (Largest-Triangle-
-//     Three-Buckets), which preserves peaks/troughs far better than naive
-//     stride sampling. Results are cached on the slice bounds (or a wall-time
+//   - Downsampling: when a sliced window has far more points than the canvas
+//     can show, reduce it per time column to first/min/max/last (M4). Every
+//     column keeps its highest and lowest sample, so the slice's extremes and
+//     any isolated spike or dip always survive (two spikes within one column
+//     show as one). Results are cached on the slice bounds (or a wall-time
 //     bucket when downsampling) so a static view costs nothing per frame.
 
 export interface TSPoint {
@@ -31,6 +32,20 @@ export interface DownsampleResult {
 // Safety cap only — retention is normally governed by time-based eviction.
 // 100k samples covers a 1h window at ~25 Hz.
 const DEFAULT_CAP = 100_000;
+// Smallest storage allocated (and shrunk back to), in samples.
+const MIN_CAPACITY = 256;
+
+// Each buffer recomputes its downsampled view on its own phase, so a chart
+// with many series spreads that work across frames instead of doing all of it
+// in one (golden-ratio spacing keeps phases evenly spread for any count).
+let phaseSeed = 0;
+const nextPhase = () => (phaseSeed = (phaseSeed + 0.6180339887) % 1);
+
+const pow2AtLeast = (n: number): number => {
+  let p = 1;
+  while (p < n) p *= 2;
+  return p;
+};
 
 /**
  * Return the value of the sample whose timestamp is closest to `t`, or
@@ -58,38 +73,57 @@ export function nearestValueAt(arr: TSPoint[], t: number): number | undefined {
 }
 
 export class TimeSeriesBuffer {
-  // Plain array with head-trim eviction. A start index avoids O(n) shifts on
-  // every append; compaction happens lazily once the dead head dominates.
-  private _buf: TSPoint[] = [];
-  private _start = 0;
+  // Ring buffer of parallel typed arrays: 16 bytes per sample, no per-sample
+  // objects, no garbage on push. Capacity is a power of two that grows on
+  // demand up to the hard cap and shrinks after large evictions, so memory
+  // follows the live window rather than the cap.
+  private _t: Float64Array;
+  private _v: Float64Array;
+  private _mask: number;
+  /** Physical index of the oldest live sample. */
+  private _head = 0;
+  /** Number of live samples. */
+  private _n = 0;
+  /** Samples ever removed from the head; `_base + i` identifies a sample. */
+  private _base = 0;
   private readonly _hardCap: number;
 
-  // Downsample cache — keyed on the inputs that affect the result.
-  private _cacheKey = '';
+  // Downsample cache, keyed on the inputs that affect the result.
+  private _ckMode = 0; // 0 = empty, 1 = exact, 2 = downsampled
+  private _ckWindow = NaN;
+  private _ckTarget = 0;
+  private _ckA = 0;
+  private _ckB = 0;
   private _cacheVal: DownsampleResult | null = null;
+  private readonly _phase: number;
 
-  constructor(hardCap: number = DEFAULT_CAP) {
-    this._hardCap = Math.max(2, hardCap);
+  /**
+   * @param hardCap  maximum samples kept (memory bound; retention is time-based)
+   * @param phase    fraction of a recompute bucket this buffer is offset by;
+   *                 defaults to a spread sequence (fixed values are for tests)
+   */
+  constructor(hardCap: number = DEFAULT_CAP, phase: number = nextPhase()) {
+    this._hardCap = Math.max(2, Math.floor(hardCap) || 2);
+    this._phase = phase;
+    const cap = Math.min(MIN_CAPACITY, pow2AtLeast(this._hardCap));
+    this._t = new Float64Array(cap);
+    this._v = new Float64Array(cap);
+    this._mask = cap - 1;
   }
 
-  /** Number of live samples (excludes trimmed head). */
+  /** Number of live samples. */
   get length(): number {
-    return this._buf.length - this._start;
+    return this._n;
   }
 
   /** Timestamp of the most recent sample, or -Infinity if empty. */
   get lastT(): number {
-    return this.length > 0 ? this._buf[this._buf.length - 1].t : -Infinity;
+    return this._n > 0 ? this._t[(this._head + this._n - 1) & this._mask] : -Infinity;
   }
 
   /** Timestamp of the oldest live sample, or +Infinity if empty. */
   get firstT(): number {
-    return this.length > 0 ? this._buf[this._start].t : Infinity;
-  }
-
-  /** The most recent sample, or undefined if empty. */
-  last(): TSPoint | undefined {
-    return this.length > 0 ? this._buf[this._buf.length - 1] : undefined;
+    return this._n > 0 ? this._t[this._head] : Infinity;
   }
 
   /**
@@ -100,109 +134,83 @@ export class TimeSeriesBuffer {
   push(t: number, v: number): void {
     if (!Number.isFinite(t) || !Number.isFinite(v)) return;
     const lastT = this.lastT;
-    this._buf.push({ t: t < lastT ? lastT : t, v });
-    // Hard cap by count to bound memory even if eviction-by-time isn't called.
-    if (this._buf.length - this._start > this._hardCap) {
-      this._start = this._buf.length - this._hardCap;
+    if (this._n >= this._hardCap) {
+      // Full: overwrite the oldest sample.
+      this._head = (this._head + 1) & this._mask;
+      this._n--;
+      this._base++;
+    } else if (this._n === this._mask + 1) {
+      this._resize((this._mask + 1) * 2);
     }
-    this._maybeCompact();
+    const i = (this._head + this._n) & this._mask;
+    this._t[i] = t < lastT ? lastT : t;
+    this._v[i] = v;
+    this._n++;
   }
 
   /** Drop samples older than (now - retentionMs). */
   evictOlderThan(now: number, retentionMs: number): void {
-    const s = this._lowerBound(now - retentionMs);
-    if (s > this._start) this._start = s;
-    this._maybeCompact();
+    const k = this._lowerBound(now - retentionMs);
+    if (k === 0) return;
+    this._head = (this._head + k) & this._mask;
+    this._n -= k;
+    this._base += k;
+    // Give memory back once the live window is far smaller than the storage.
+    const cap = this._mask + 1;
+    if (cap > MIN_CAPACITY && this._n * 4 < cap) this._resize(Math.max(MIN_CAPACITY, pow2AtLeast(this._n * 2)));
   }
 
-  // Reclaim the dead head once it outweighs the live samples. Compaction
-  // shifts indices, so it must drop the cache (exact keys embed indices).
-  private _maybeCompact(): void {
-    if (this._start > 1024 && this._start >= this._buf.length - this._start) {
-      this._buf = this._buf.slice(this._start);
-      this._start = 0;
-      this._cacheVal = null;
-    }
+  /** All live samples, oldest first. */
+  toArray(): TSPoint[] {
+    return this._points(0, this._n);
   }
 
-  // First live index whose timestamp is >= t (buf.length if none). O(log n).
-  private _lowerBound(t: number): number {
-    let lo = this._start;
-    let hi = this._buf.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (this._buf[mid].t < t) lo = mid + 1;
-      else hi = mid;
-    }
-    return lo;
-  }
-
-  /**
-   * Live samples with timestamp >= t, as a new array. O(log n + k). Used by the
-   * detectors and health scoring so they read a bounded recent span instead of
-   * copying the whole buffer.
-   */
+  /** Live samples with timestamp >= t. O(log n + k). */
   since(t: number): TSPoint[] {
-    return this._buf.slice(this._lowerBound(t));
+    return this._points(this._lowerBound(t), this._n);
   }
 
   /** Values of live samples with timestamp >= t. */
   valuesSince(t: number): number[] {
     const out: number[] = [];
-    for (let i = this._lowerBound(t); i < this._buf.length; i++) out.push(this._buf[i].v);
+    for (let i = this._lowerBound(t); i < this._n; i++) out.push(this._v[(this._head + i) & this._mask]);
     return out;
   }
 
-  /** All live samples (no copy of individual points; slices the live window). */
-  toArray(): TSPoint[] {
-    return this._buf.slice(this._start);
+  /** Values of all live samples. */
+  values(): number[] {
+    return this.valuesSince(-Infinity);
   }
 
   /**
-   * Value of the sample whose timestamp is closest to `t`, searching the
-   * buffer's internal storage directly (no array copy). O(log n) binary search.
-   * Used by the hover hit-test, which runs on every mouse move — avoiding the
-   * per-hover toArray() allocation here is what keeps hovering cheap on large
-   * buffers.
+   * Value of the sample whose timestamp is closest to `t` (the earlier one on
+   * a tie), or undefined if empty. O(log n), no copying — hover calls this on
+   * every mouse move.
    */
   nearestValueAt(t: number): number | undefined {
-    const lo0 = this._start;
-    const hi0 = this._buf.length - 1;
-    if (hi0 < lo0) return undefined;
-    if (t <= this._buf[lo0].t) return this._buf[lo0].v;
-    if (t >= this._buf[hi0].t) return this._buf[hi0].v;
-    let lo = lo0;
-    let hi = hi0;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (this._buf[mid].t < t) lo = mid + 1;
-      else hi = mid;
-    }
-    const hiPt = this._buf[lo];
-    const loPt = this._buf[lo - 1];
-    return Math.abs(hiPt.t - t) < Math.abs(t - loPt.t) ? hiPt.v : loPt.v;
-  }
-
-  /** Raw values only (for code paths that just need numbers, e.g. health). */
-  values(): number[] {
-    const out: number[] = [];
-    for (let i = this._start; i < this._buf.length; i++) out.push(this._buf[i].v);
-    return out;
+    const n = this._n;
+    if (n === 0) return undefined;
+    if (t <= this.firstT) return this._v[this._head];
+    if (t >= this.lastT) return this._v[(this._head + n - 1) & this._mask];
+    const i = this._lowerBound(t); // first sample with time >= t; i >= 1 here
+    const hi = (this._head + i) & this._mask;
+    const lo = (this._head + i - 1) & this._mask;
+    return Math.abs(this._t[hi] - t) < Math.abs(t - this._t[lo]) ? this._v[hi] : this._v[lo];
   }
 
   /**
-   * Return samples within the last `windowMs` (relative to `now`), downsampled
-   * to at most `targetPoints` via LTTB if necessary. Cached per input tuple.
+   * Samples within the last `windowMs` (relative to `now`; all samples when
+   * undefined) and not after `now`. Slices longer than `targetPoints` are
+   * downsampled to `targetPoints / 4` time columns, keeping each column's
+   * first, last, minimum and maximum sample (M4): at most
+   * `max(targetPoints, 4)` points, always fewer than the slice, with every
+   * column's extremes kept.
    *
-   * `recomputeMs` (default 0 = exact): when the slice is large enough to be
-   * downsampled, recomputing LTTB on every single new sample is wasteful — one
-   * sample out of thousands doesn't visibly change the downsampled shape, and at
-   * 20Hz that recompute dominates the frame budget (measured: ~3.5ms/frame for
-   * 10 agents vs ~0.008ms on a cache hit). Passing e.g. 250 quantizes the cache
-   * key so LTTB recomputes at most every 250ms. The live "tip" is drawn
-   * separately by the consumer, so the lag is invisible. This coarsening is
-   * applied ONLY on the downsampled path; small (un-downsampled) slices keep
-   * exact per-sample invalidation so their values are never stale.
+   * Cached. Exact results are keyed on the slice bounds, so every new or
+   * expired sample shows immediately. Downsampled results are keyed on a
+   * `recomputeMs` wall-time bucket (when > 0), so a long window is recomputed
+   * at most once per bucket however fast samples arrive; the live tip is drawn
+   * separately, so the lag is invisible.
    */
   windowed(
     now: number,
@@ -210,41 +218,162 @@ export class TimeSeriesBuffer {
     targetPoints: number,
     recomputeMs = 0
   ): DownsampleResult {
-    // Slice bounds first (binary search), so the cache key can reflect exactly
-    // which samples are in view. Without the cutoff in the key, a quiet agent
-    // kept serving points that had already scrolled out of the window.
-    const lo =
-      windowMs !== undefined ? this._lowerBound(now - windowMs) : this._start;
-    const sliceLen = this._buf.length - lo;
-    const willDownsample = sliceLen > targetPoints && targetPoints >= 3;
-
-    // Downsampled path: quantize on wall time so LTTB reruns at most once per
-    // `recomputeMs`, regardless of how many samples arrive in between (the live
-    // tip is drawn separately, so the lag is invisible). Exact path: key on the
-    // slice bounds so every new or expired sample is reflected immediately.
-    const key =
-      willDownsample && recomputeMs > 0
-        ? `d:${windowMs ?? 'all'}:${targetPoints}:${Math.floor(now / recomputeMs)}`
-        : `e:${windowMs ?? 'all'}:${targetPoints}:${lo}:${this._buf.length}`;
-    if (this._cacheVal && this._cacheKey === key) return this._cacheVal;
-
-    const slice = this._buf.slice(lo);
-
-    let result: DownsampleResult;
-    if (slice.length <= targetPoints || targetPoints < 3) {
-      result = { points: slice, downsampled: false };
+    const lo = windowMs !== undefined ? this._lowerBound(now - windowMs) : 0;
+    // Never past `now`: a paused view keeps its slice while data keeps arriving.
+    const hi = this._upperBound(now);
+    const sliceLen = Math.max(0, hi - lo);
+    // M4 returns at most 4 samples per column, so `targetPoints / 4` columns
+    // keep the output within `targetPoints`. Downsample only slices longer
+    // than both the target and that maximum, so the result is always smaller.
+    const columns = Math.max(1, Math.floor(targetPoints / 4));
+    const downsample = targetPoints >= 3 && sliceLen > Math.max(targetPoints, columns * 4);
+    const win = windowMs ?? -1;
+    let mode: number;
+    let a: number;
+    let b: number;
+    if (downsample && recomputeMs > 0) {
+      mode = 2;
+      a = Math.floor(now / recomputeMs + this._phase);
+      b = recomputeMs;
     } else {
-      result = { points: lttb(slice, targetPoints), downsampled: true };
+      mode = 1;
+      a = this._base + lo;
+      b = this._base + hi;
     }
-
-    this._cacheKey = key;
+    if (
+      this._cacheVal &&
+      this._ckMode === mode &&
+      this._ckWindow === win &&
+      this._ckTarget === targetPoints &&
+      this._ckA === a &&
+      this._ckB === b
+    ) {
+      return this._cacheVal;
+    }
+    const result: DownsampleResult = downsample
+      ? { points: this._m4(lo, hi, columns), downsampled: true }
+      : { points: this._points(lo, hi), downsampled: false };
+    this._ckMode = mode;
+    this._ckWindow = win;
+    this._ckTarget = targetPoints;
+    this._ckA = a;
+    this._ckB = b;
     this._cacheVal = result;
     return result;
+  }
+
+  // ── internals ────────────────────────────────────────────────────────────
+
+  private _point(i: number): TSPoint {
+    const p = (this._head + i) & this._mask;
+    return { t: this._t[p], v: this._v[p] };
+  }
+
+  private _points(from: number, to: number): TSPoint[] {
+    const out = new Array<TSPoint>(Math.max(0, to - from));
+    for (let i = from; i < to; i++) out[i - from] = this._point(i);
+    return out;
+  }
+
+  // First logical index whose timestamp is >= t (length if none). O(log n).
+  private _lowerBound(t: number): number {
+    let lo = 0;
+    let hi = this._n;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (this._t[(this._head + mid) & this._mask] < t) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
+  // First logical index whose timestamp is > t (length if none). O(log n).
+  private _upperBound(t: number): number {
+    let lo = 0;
+    let hi = this._n;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (this._t[(this._head + mid) & this._mask] <= t) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
+  private _resize(capacity: number): void {
+    const t = new Float64Array(capacity);
+    const v = new Float64Array(capacity);
+    for (let i = 0; i < this._n; i++) {
+      const p = (this._head + i) & this._mask;
+      t[i] = this._t[p];
+      v[i] = this._v[p];
+    }
+    this._t = t;
+    this._v = v;
+    this._mask = capacity - 1;
+    this._head = 0;
+  }
+
+  /**
+   * M4 downsampling of logical range [from, to) into `columns` equal time
+   * columns: each column contributes its first, minimum, maximum and last
+   * sample (deduplicated, in time order). O(n), no intermediate copies.
+   */
+  private _m4(from: number, to: number, columns: number): TSPoint[] {
+    const out: TSPoint[] = [];
+    const T = this._t;
+    const V = this._v;
+    const head = this._head;
+    const mask = this._mask;
+    const t0 = T[(head + from) & mask];
+    const span = T[(head + to - 1) & mask] - t0;
+    const colSpan = span / columns;
+    const emit = (first: number, a: number, b: number, last: number) => {
+      // The column's distinct extreme samples, in time order.
+      out.push(this._point(first));
+      if (a !== first) out.push(this._point(a));
+      if (b !== a && b !== first) out.push(this._point(b));
+      if (last !== b && last !== a && last !== first) out.push(this._point(last));
+    };
+    let col = 0;
+    // End of the current column; the last column absorbs rounding.
+    let colEnd = colSpan > 0 ? t0 + colSpan : Infinity;
+    let first = from;
+    let last = from;
+    let min = from;
+    let max = from;
+    let minV = V[(head + from) & mask];
+    let maxV = minV;
+    for (let i = from + 1; i < to; i++) {
+      const p = (head + i) & mask;
+      const t = T[p];
+      const v = V[p];
+      if (t >= colEnd && col < columns - 1) {
+        emit(first, Math.min(min, max), Math.max(min, max), last);
+        // Skip empty columns.
+        // Always advance: float error can map t >= colEnd back to `col`.
+        col = Math.max(col + 1, Math.min(columns - 1, Math.floor((t - t0) / colSpan)));
+        colEnd = col === columns - 1 ? Infinity : t0 + (col + 1) * colSpan;
+        first = last = min = max = i;
+        minV = maxV = v;
+        continue;
+      }
+      last = i;
+      if (v < minV) {
+        minV = v;
+        min = i;
+      } else if (v > maxV) {
+        maxV = v;
+        max = i;
+      }
+    }
+    emit(first, Math.min(min, max), Math.max(min, max), last);
+    return out;
   }
 }
 
 /**
- * Largest-Triangle-Three-Buckets downsampling. Keeps the first and last points,
+ * Largest-Triangle-Three-Buckets downsampling. No longer used by the buffer
+ * (which uses M4); kept as a standalone utility. Keeps the first and last points,
  * and for each interior bucket picks the point forming the largest triangle with
  * the previous selected point and the average of the next bucket. Preserves the
  * visual shape (peaks/valleys) of the series. O(n).
