@@ -119,11 +119,6 @@ export class TimeSeriesBuffer {
     return this._n > 0 ? this._t[this._head] : Infinity;
   }
 
-  /** The most recent sample, or undefined if empty. */
-  last(): TSPoint | undefined {
-    return this._n > 0 ? this._point(this._n - 1) : undefined;
-  }
-
   /**
    * Append a sample. Time must be non-decreasing; a sample older than the
    * newest one is clamped forward so the buffer stays sorted (binary searches
@@ -198,11 +193,10 @@ export class TimeSeriesBuffer {
 
   /**
    * Samples within the last `windowMs` (relative to `now`; all samples when
-   * undefined). When the slice has more than `targetPoints` samples it is
-   * downsampled to `targetPoints / 2` time columns, keeping each column's
-   * first, last, minimum and maximum sample (M4): typically about
-   * `targetPoints` points (at most twice that), and peaks and dips are never
-   * lost.
+   * undefined). Slices longer than about `2 × targetPoints` are downsampled
+   * to `targetPoints / 2` time columns, keeping each column's first, last,
+   * minimum and maximum sample (M4): typically about `targetPoints` points,
+   * never more than the input, and peaks and dips are never lost.
    *
    * Cached. Exact results are keyed on the slice bounds, so every new or
    * expired sample shows immediately. Downsampled results are keyed on a
@@ -218,7 +212,10 @@ export class TimeSeriesBuffer {
   ): DownsampleResult {
     const lo = windowMs !== undefined ? this._lowerBound(now - windowMs) : 0;
     const sliceLen = this._n - lo;
-    const downsample = sliceLen > targetPoints && targetPoints >= 3;
+    // M4 returns at most 4 samples per column, so only downsample when that
+    // is a real reduction; smaller slices are returned as-is.
+    const columns = Math.max(1, Math.ceil(targetPoints / 2));
+    const downsample = targetPoints >= 3 && sliceLen > columns * 4;
     const win = windowMs ?? -1;
     let mode: number;
     let a: number;
@@ -243,7 +240,7 @@ export class TimeSeriesBuffer {
       return this._cacheVal;
     }
     const result: DownsampleResult = downsample
-      ? { points: this._m4(lo, this._n, Math.max(1, Math.ceil(targetPoints / 2))), downsampled: true }
+      ? { points: this._m4(lo, this._n, columns), downsampled: true }
       : { points: this._points(lo, this._n), downsampled: false };
     this._ckMode = mode;
     this._ckWindow = win;

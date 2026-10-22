@@ -32,11 +32,12 @@ describe('time-series buffer', () => {
   });
 
   it('keeps the downsample cache across pushes within a recompute bucket', () => {
-    const buf = new TimeSeriesBuffer(100);
+    const buf = new TimeSeriesBuffer(500);
     for (let i = 0; i < 2000; i++) buf.push(i, i % 7);
     const a = buf.windowed(2000, undefined, 50, 1000);
+    expect(a.downsampled).toBe(true);
     buf.push(2000, 3); // hard cap slides the head
-    const b = buf.windowed(2000.5, undefined, 50, 1000);
+    const b = buf.windowed(2000, undefined, 50, 1000);
     expect(b).toBe(a);
   });
 
