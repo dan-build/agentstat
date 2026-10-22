@@ -61,7 +61,6 @@ export function computeView(
         ? 'progress'
         : 'tokens';
   const primaryIsTokens = metric === 'tokens';
-  const primaryMap = primaryIsTokens ? store.tokens : store.progress;
 
   let tEnd: number;
   let span: number;
@@ -75,7 +74,9 @@ export function computeView(
     let oldest = Infinity;
     for (const rec of store.list) {
       if (!rec.visible) continue;
-      const buf = primaryMap.get(rec.id);
+      // Token samples: every agent has them (progress only once reported),
+      // and they're as recent as its progress.
+      const buf = store.tokens.get(rec.id);
       if (!buf || buf.length === 0) continue;
       newest = Math.max(newest, Math.min(buf.lastT, viewNow));
       oldest = Math.min(oldest, buf.firstT);

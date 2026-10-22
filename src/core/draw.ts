@@ -329,7 +329,13 @@ export function drawFrame(
   const hv = dc.hover;
   if (hv) {
     const rec = store.byId.get(hv.agentId);
-    if (!rec || !rec.visible || hv.t < view.tStart || hv.metric !== view.metric) {
+    if (
+      !rec ||
+      !rec.visible ||
+      hv.t < view.tStart ||
+      hv.metric !== view.metric ||
+      !primaryBuffer(store, hv.agentId, view)?.length
+    ) {
       hoverResult = 'gone';
     } else {
       const x = xOf(hv.t);

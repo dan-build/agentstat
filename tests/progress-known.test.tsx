@@ -105,3 +105,13 @@ describe('unknown progress in the component', () => {
     expect(ref.current!.getLiveMetrics('a')!.progressKnown).toBe(true);
   });
 });
+
+describe('time axis with progress and token-only agents', () => {
+  it("'both' keeps moving while token-only agents report, after progress agents go quiet", () => {
+    const store = new AgentStore([createAgent('a', 'A'), createAgent('b', 'B')], { maxHistoryPoints: 1000 }, T0);
+    for (let t = 100; t <= 2_000; t += 100) store.ingest('a', { tokensRate: 10, progress: t / 100 }, T0 + t);
+    for (let t = 100; t <= 8_000; t += 100) store.ingest('b', { tokensRate: 20 }, T0 + t);
+    const v = computeView(store, { metric: 'both', windowSeconds: undefined, tokenAxisMax: undefined }, T0 + 8_000, 800, 400);
+    expect(v.tEnd).toBe(T0 + 8_000);
+  });
+});

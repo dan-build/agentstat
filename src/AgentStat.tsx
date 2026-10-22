@@ -702,7 +702,8 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
       name: rec.name,
       color: rec.color ?? palette[idx % palette.length],
       point,
-      progressKnown: store.progressKnown.has(rec.id),
+      // Known by then: progress reported at or before this sample.
+      progressKnown: store.progressKnown.has(rec.id) && p.t >= (store.progress.get(rec.id)?.firstT ?? Infinity),
       x: clamp(view.xOf(p.t), 90, view.cssW - 90),
       y: view.primaryToY(p.v),
     });
