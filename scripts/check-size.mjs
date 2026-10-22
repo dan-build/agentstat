@@ -6,12 +6,11 @@
 import { readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { build, transform } from 'esbuild';
+import { build } from 'esbuild';
 
-// Raise deliberately, with a reason in the commit. History: 9 KB (0.3) →
-// 17 KB (0.4: accessibility, theming) → 18 KB (0.4.1: legend overflow menu,
-// adaptive panel).
-const BUDGETS = { 'dist/index.js': 18_000, 'dist/index.cjs': 19_000 };
+// Raise deliberately, with a reason in the commit. History (consumer-bundled
+// min+gzip): 0.4.1 17.3 KB → 0.5 store/renderer split 17.8 KB.
+const BUDGETS = { 'dist/index.js': 18_000, 'dist/index.cjs': 18_500 };
 const TREESHAKE_BUDGET = 2_000;
 
 let failed = false;
@@ -20,11 +19,22 @@ const report = (ok, msg) => {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${msg}`);
 };
 
+// Measured the way consumers ship it: bundled and minified with React
+// external, then gzipped. (Minifying the file on its own overstates the size:
+// it can't shorten top-level names or merge imports.)
 for (const [file, budget] of Object.entries(BUDGETS)) {
   const src = readFileSync(file, 'utf8');
-  const { code } = await transform(src, { minify: true, loader: 'js' });
-  const gz = gzipSync(code).length;
-  report(gz <= budget, `${file}: ${gz} B min+gzip (budget ${budget} B)`);
+  const out = await build({
+    entryPoints: [file],
+    bundle: true,
+    minify: true,
+    write: false,
+    format: file.endsWith('.cjs') ? 'cjs' : 'esm',
+    external: ['react', 'react-dom', 'react/jsx-runtime'],
+    logLevel: 'silent',
+  });
+  const gz = gzipSync(out.outputFiles[0].contents).length;
+  report(gz <= budget, `${file}: ${gz} B bundled min+gzip (budget ${budget} B)`);
   report(/^['"]use client['"]/.test(src), `${file}: starts with 'use client'`);
 }
 

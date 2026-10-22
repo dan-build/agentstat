@@ -15,4 +15,9 @@ export default defineConfig({
   // importing the component from a React Server Component (Next.js App
   // Router) fails on the first hook.
   banner: { js: "'use client';" },
+  esbuildOptions(options) {
+    // Internal members are named with a leading underscore so the build can
+    // shorten them; nothing public may start with one.
+    options.mangleProps = /^_/;
+  },
 });

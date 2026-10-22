@@ -52,8 +52,8 @@ describe('initialAgents merge behavior (FIX 4)', () => {
     expect(healthBefore!.tokenEfficiency).toBeLessThan(50);
 
     // Force a re-render with a FRESH array literal containing the same ids.
-    // Pre-FIX-4, this would blow away agentsRef.current and the subsequent
-    // health sync would read the initial tokensRate (15), producing efficiency=100.
+    // This must not reset the agents' runtime state; if it did, the next
+    // health tick would read the initial tokensRate (15) and report 100.
     rerender(
       <AgentStat
         ref={ref}

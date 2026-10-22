@@ -95,22 +95,22 @@ export class AgentStore {
   pausedAt: number | null = null;
   options: StoreOptions;
 
-  private props = new Map<string, Agent>();
-  private latency = new Map<string, number[]>();
-  private health = new Map<string, HealthMetrics>();
-  private episodes = new Map<string, Map<AnomalyKind, Episode>>();
+  private _props = new Map<string, Agent>();
+  private _latency = new Map<string, number[]>();
+  private _health = new Map<string, HealthMetrics>();
+  private _episodes = new Map<string, Map<AnomalyKind, Episode>>();
   // Agents whose anomalous status was set by the consumer; the simulator
   // must not auto-recover them.
-  private locked = new Set<string>();
-  private sim = new Map<string, SimState>();
-  private simTouched = new Set<string>();
-  private rows: RowSnapshot[] = [];
-  private listeners = new Set<() => void>();
+  private _locked = new Set<string>();
+  private _sim = new Map<string, SimState>();
+  private _simTouched = new Set<string>();
+  private _rows: RowSnapshot[] = [];
+  private _listeners = new Set<() => void>();
 
   constructor(agents: Agent[], options: StoreOptions, now: number) {
     this.options = options;
     this.syncRoster(agents, now);
-    this.rows = this.buildRows();
+    this._rows = this._buildRows();
   }
 
   // ── Roster ─────────────────────────────────────────────────────────────
@@ -121,7 +121,7 @@ export class AgentStore {
    * toggle isn't clobbered by a re-render passing the same `visible` again.
    */
   syncRoster(incoming: Agent[], now: number): void {
-    const prevProps = this.props;
+    const prevProps = this._props;
     const nextProps = new Map<string, Agent>();
     const next: AgentRecord[] = [];
     for (const a of Array.isArray(incoming) ? incoming : []) {
@@ -151,39 +151,37 @@ export class AgentStore {
       next.push(rec);
     }
     for (const id of Array.from(this.byId.keys())) {
-      if (!nextProps.has(id)) this.drop(id);
+      if (!nextProps.has(id)) this._drop(id);
     }
-    this.props = nextProps;
+    this._props = nextProps;
     this.list = next;
     this.dirty = true;
   }
 
-  private drop(id: string): void {
+  private _drop(id: string): void {
     this.byId.delete(id);
     this.progress.delete(id);
     this.tokens.delete(id);
     this.status.delete(id);
-    this.latency.delete(id);
+    this._latency.delete(id);
     this.live.delete(id);
-    this.health.delete(id);
+    this._health.delete(id);
     this.anomalies.delete(id);
-    this.episodes.delete(id);
-    this.locked.delete(id);
-    this.sim.delete(id);
+    this._episodes.delete(id);
+    this._locked.delete(id);
+    this._sim.delete(id);
   }
 
   toggleVisible(id: string): void {
     const rec = this.byId.get(id);
     if (!rec) return;
     rec.visible = !rec.visible;
-    this.axis.bucket = -1;
-    this.dirty = true;
+    this.invalidate(true);
   }
 
   showAll(): void {
     for (const rec of this.list) rec.visible = true;
-    this.axis.bucket = -1;
-    this.dirty = true;
+    this.invalidate(true);
   }
 
   // ── Ingest ─────────────────────────────────────────────────────────────
@@ -194,7 +192,7 @@ export class AgentStore {
     return (winS !== undefined && winS > 0 ? winS * 1000 : DEFAULT_VIEW_MS) * 1.5;
   }
 
-  private pushSample(rec: AgentRecord, now: number): void {
+  private _pushSample(rec: AgentRecord, now: number): void {
     const pBuf = this.progress.get(rec.id);
     const tBuf = this.tokens.get(rec.id);
     if (!pBuf || !tBuf) return;
@@ -239,8 +237,8 @@ export class AgentStore {
       status = undefined;
     }
 
-    if (status === 'stuck' || status === 'hallucinating') this.locked.add(id);
-    else if (status !== undefined) this.locked.delete(id);
+    if (status === 'stuck' || status === 'hallucinating') this._locked.add(id);
+    else if (status !== undefined) this._locked.delete(id);
 
     const cur = rec.current;
     if (tokensRate !== undefined) cur.tokensRate = tokensRate;
@@ -249,17 +247,17 @@ export class AgentStore {
     if (errorCount !== undefined) cur.errorCount = errorCount;
     if (latencyMs !== undefined) {
       cur.latencyMs = latencyMs;
-      const log = this.latency.get(id) ?? [];
+      const log = this._latency.get(id) ?? [];
       log.push(latencyMs);
       if (log.length > LATENCY_HISTORY) log.splice(0, log.length - LATENCY_HISTORY);
-      this.latency.set(id, log);
+      this._latency.set(id, log);
     }
     if (status !== undefined) {
       cur.status = status;
       this.status.get(id)?.record(now, status);
       if (this.pausedAt === null) this.dirty = true;
     }
-    if (tokensRate !== undefined || progress !== undefined) this.pushSample(rec, now);
+    if (tokensRate !== undefined || progress !== undefined) this._pushSample(rec, now);
   }
 
   // ── Demo simulator ─────────────────────────────────────────────────────
@@ -267,43 +265,43 @@ export class AgentStore {
   simTick(rng: Rng, now: number): void {
     if (this.pausedAt !== null) return;
     for (const rec of this.list) {
-      const prev = this.sim.get(rec.id) ?? {
+      const prev = this._sim.get(rec.id) ?? {
         anomalyTicks: 0,
         confidence: rec.current.confidenceScore ?? 0.9,
       };
-      const step = simStep(toAgent(rec), prev, this.locked.has(rec.id), rng);
-      this.sim.set(rec.id, step.state);
+      const step = simStep(toAgent(rec), prev, this._locked.has(rec.id), rng);
+      this._sim.set(rec.id, step.state);
       rec.current.tokensRate = step.tokensRate;
       rec.current.progress = step.progress;
       rec.current.confidenceScore = step.confidenceScore;
-      this.simTouched.add(rec.id);
+      this._simTouched.add(rec.id);
       if (step.status !== rec.current.status) {
         rec.current.status = step.status;
         this.status.get(rec.id)?.record(now, step.status);
       }
-      this.pushSample(rec, now);
+      this._pushSample(rec, now);
     }
   }
 
   /** Don't leave demo-only signals on agents once the simulator stops. */
   simStop(): void {
-    for (const id of this.simTouched) {
+    for (const id of this._simTouched) {
       const rec = this.byId.get(id);
       if (rec) delete rec.current.confidenceScore;
     }
-    this.simTouched.clear();
-    this.sim.clear();
+    this._simTouched.clear();
+    this._sim.clear();
   }
 
   // ── Health and anomalies ───────────────────────────────────────────────
 
   /**
    * Run detection and health for every agent (hidden ones too: hiding a line
-   * must not stop monitoring it). Returns, in order, the anomalies that just
-   * opened or escalated and the health values that changed.
+   * must not stop monitoring it). Emits, in order and per agent, anomalies
+   * that just opened or escalated and health values that changed. Each
+   * agent's state is updated before its events are emitted.
    */
-  healthTick(now: number, detectOn: boolean, cfg: AnomalyConfig): StoreEvent[] {
-    const events: StoreEvent[] = [];
+  healthTick(now: number, detectOn: boolean, cfg: AnomalyConfig, emit: (e: StoreEvent) => void): void {
     for (const rec of this.list) {
       const tBuf = this.tokens.get(rec.id);
       let found: Anomaly[] = [];
@@ -317,26 +315,26 @@ export class AgentStore {
         this.anomalies.set(rec.id, found);
 
         // Once per episode (and on escalation), not once per tick.
-        const eps = this.episodes.get(rec.id) ?? new Map<AnomalyKind, Episode>();
+        const eps = this._episodes.get(rec.id) ?? new Map<AnomalyKind, Episode>();
         for (const a of found) {
           const open = eps.get(a.kind);
           const escalated = open?.severity === 'warning' && a.severity === 'critical';
-          if (!open || escalated) events.push({ kind: 'anomaly', id: rec.id, name: rec.name, anomaly: a });
+          if (!open || escalated) emit({ kind: 'anomaly', id: rec.id, name: rec.name, anomaly: a });
           eps.set(a.kind, { severity: a.severity, lastSeen: now });
         }
         for (const [kind, ep] of Array.from(eps)) {
           if (now - ep.lastSeen > EPISODE_GRACE_MS) eps.delete(kind);
         }
-        this.episodes.set(rec.id, eps);
+        this._episodes.set(rec.id, eps);
       } else if (this.anomalies.has(rec.id)) {
         this.anomalies.delete(rec.id);
-        this.episodes.delete(rec.id);
+        this._episodes.delete(rec.id);
         this.dirty = true;
       }
 
       const rates = tBuf ? tBuf.valuesSince(now - HEALTH_WINDOW_MS) : [];
-      const health = calculateHealth(toAgent(rec), rates, detectOn ? found : undefined, this.latency.get(rec.id));
-      const cached = this.health.get(rec.id);
+      const health = calculateHealth(toAgent(rec), rates, detectOn ? found : undefined, this._latency.get(rec.id));
+      const cached = this._health.get(rec.id);
       // Ease the headline score so it doesn't flicker; a large drop (e.g. an
       // anomaly penalty) surfaces immediately.
       let score = health.score;
@@ -349,10 +347,9 @@ export class AgentStore {
         Math.abs(cached.score - smoothed.score) >= 1 ||
         cached.hallucinationRisk !== smoothed.hallucinationRisk ||
         cached.latencyTrend !== smoothed.latencyTrend;
-      this.health.set(rec.id, smoothed);
-      if (changed) events.push({ kind: 'health', id: rec.id, health: smoothed });
+      this._health.set(rec.id, smoothed);
+      if (changed) emit({ kind: 'health', id: rec.id, health: smoothed });
     }
-    return events;
   }
 
   // ── Live values ────────────────────────────────────────────────────────
@@ -388,6 +385,25 @@ export class AgentStore {
     return animating;
   }
 
+  // ── Invalidation ───────────────────────────────────────────────────────
+
+  /** Request a redraw; `rescaleAxis` also recomputes the token axis. */
+  invalidate(rescaleAxis = false): void {
+    if (rescaleAxis) this.axis.bucket = -1;
+    this.dirty = true;
+  }
+
+  /** Whether a redraw was requested since the last call; clears the request. */
+  takeDirty(): boolean {
+    const d = this.dirty;
+    this.dirty = false;
+    return d;
+  }
+
+  setOptions(options: StoreOptions): void {
+    this.options = options;
+  }
+
   // ── Pause ──────────────────────────────────────────────────────────────
 
   setPaused(paused: boolean, now: number): void {
@@ -398,7 +414,7 @@ export class AgentStore {
   // ── Reads ──────────────────────────────────────────────────────────────
 
   getHealth(id: string): HealthMetrics | undefined {
-    const h = this.health.get(id);
+    const h = this._health.get(id);
     return h ? { ...h } : undefined;
   }
 
@@ -416,7 +432,7 @@ export class AgentStore {
 
   // ── Row snapshot (useSyncExternalStore) ────────────────────────────────
 
-  private buildRows(): RowSnapshot[] {
+  private _buildRows(): RowSnapshot[] {
     return this.list.map((r) => ({
       id: r.id,
       name: r.name,
@@ -426,22 +442,22 @@ export class AgentStore {
       // The latest real sample, not the eased tip: frames can be throttled
       // (background tabs), and a readout must not lag behind the data.
       rate: r.current.tokensRate,
-      score: this.health.get(r.id)?.score ?? null,
+      score: this._health.get(r.id)?.score ?? null,
     }));
   }
 
   /** Recompute rows; notify subscribers only if something visible changed. */
   publish(): void {
-    const next = this.buildRows();
-    if (sameRows(this.rows, next)) return;
-    this.rows = next;
-    for (const l of this.listeners) l();
+    const next = this._buildRows();
+    if (sameRows(this._rows, next)) return;
+    this._rows = next;
+    for (const l of this._listeners) l();
   }
 
   subscribe = (listener: () => void): (() => void) => {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    this._listeners.add(listener);
+    return () => this._listeners.delete(listener);
   };
 
-  getRows = (): RowSnapshot[] => this.rows;
+  getRows = (): RowSnapshot[] => this._rows;
 }

@@ -60,7 +60,7 @@ describe('time-series buffer', () => {
     }
     expect(buf.length).toBeLessThanOrEqual(101);
     // Internal storage stays proportional to live samples.
-    expect((buf as unknown as { buf: unknown[] }).buf.length).toBeLessThan(2200);
+    expect((buf as unknown as { _buf: unknown[] })._buf.length).toBeLessThan(2200);
   });
 });
 

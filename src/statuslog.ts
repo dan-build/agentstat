@@ -20,15 +20,15 @@ export interface StatusTransition {
 }
 
 export class StatusLog {
-  private transitions: StatusTransition[] = [];
-  private readonly hardCap: number;
+  private _transitions: StatusTransition[] = [];
+  private readonly _hardCap: number;
 
   constructor(hardCap = 2_000) {
-    this.hardCap = Math.max(2, hardCap);
+    this._hardCap = Math.max(2, hardCap);
   }
 
   get length(): number {
-    return this.transitions.length;
+    return this._transitions.length;
   }
 
   /**
@@ -37,13 +37,13 @@ export class StatusLog {
    * monotonic `t` (callers pass increasing timestamps).
    */
   record(t: number, status: AgentStatus): void {
-    const n = this.transitions.length;
-    if (n > 0 && this.transitions[n - 1].status === status) return;
-    this.transitions.push({ t, status });
-    if (this.transitions.length > this.hardCap) {
+    const n = this._transitions.length;
+    if (n > 0 && this._transitions[n - 1].status === status) return;
+    this._transitions.push({ t, status });
+    if (this._transitions.length > this._hardCap) {
       // Drop oldest transitions; the remaining list still defines status for
       // all times at or after its new first entry.
-      this.transitions.splice(0, this.transitions.length - this.hardCap);
+      this._transitions.splice(0, this._transitions.length - this._hardCap);
     }
   }
 
@@ -53,7 +53,7 @@ export class StatusLog {
    * the first recorded transition. Binary search, O(log n).
    */
   statusAt(t: number): AgentStatus | undefined {
-    const a = this.transitions;
+    const a = this._transitions;
     if (a.length === 0) return undefined;
     if (t < a[0].t) return undefined;
     let lo = 0;
@@ -73,7 +73,7 @@ export class StatusLog {
 
   /** Drop transitions strictly older than `t`, except keep the one in effect at `t`. */
   evictOlderThan(t: number): void {
-    const a = this.transitions;
+    const a = this._transitions;
     if (a.length === 0) return;
     // Find the last transition with timestamp <= t; everything before it is
     // redundant for queries at or after t.
@@ -82,12 +82,12 @@ export class StatusLog {
       if (a[i].t <= t) keepFrom = i;
       else break;
     }
-    if (keepFrom > 0) this.transitions.splice(0, keepFrom);
+    if (keepFrom > 0) this._transitions.splice(0, keepFrom);
   }
 
   /** All transitions within [fromT, toT], plus the one active at fromT. For segment coloring. */
   transitionsInRange(fromT: number, toT: number): StatusTransition[] {
-    const a = this.transitions;
+    const a = this._transitions;
     if (a.length === 0) return [];
     const out: StatusTransition[] = [];
     // The status active at the window's start.

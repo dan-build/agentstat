@@ -25,7 +25,7 @@ import { AgentStore, type RowSnapshot } from './core/store';
 import type { AgentRecord } from './core/record';
 import { computeView, pointsFor, primaryBuffer, type View } from './core/view';
 import { ColorResolver } from './core/colors';
-import { drawFrame, type GradientCache, type HoverTarget } from './core/draw';
+import { drawFrame, type DrawContext, type GradientCache, type HoverTarget } from './core/draw';
 import { CSS } from './ui/styles';
 import { Legend } from './ui/Legend';
 import { Panel } from './ui/Panel';
@@ -265,6 +265,17 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
   );
   const [gradients] = useState<GradientCache>(() => ({ key: '', map: new Map() }));
   const [colors] = useState(() => new ColorResolver(() => rootRef.current));
+  // Reused every frame; its changing fields are refreshed before each draw.
+  const [drawCtx] = useState<DrawContext>(() => ({
+    store,
+    opts: { metric: 'progress', smoothing: 0, anomalyDetection: false },
+    theme: { mode: 'light', t: tokensFor('light') },
+    colors,
+    gradients,
+    resolveColor: (c) => resolveCssVar(c, rootRef.current),
+    hover: null,
+    reduceMotion: false,
+  }));
   const rows = useSyncExternalStore(store.subscribe, store.getRows, store.getRows);
 
   // ── Latest props, read by the render loop and timers
@@ -294,7 +305,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
       onHealthChange,
       onPointClick: onPointClick ?? onSpikeClick,
     };
-    store.options = { windowSeconds, maxHistoryPoints };
+    store.setOptions({ windowSeconds, maxHistoryPoints });
     if (
       prev.metric !== metric ||
       prev.tokenAxisMax !== tokenAxisMax ||
@@ -303,8 +314,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
       prev.referenceLine !== referenceLine ||
       prev.anomalyDetection !== anomalyDetection
     ) {
-      store.axis.bucket = -1;
-      store.dirty = true;
+      store.invalidate(true);
     }
   });
 
@@ -347,7 +357,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
     reducedMotionRef.current = prefersReducedMotion();
     return watchMedia('(prefers-reduced-motion: reduce)', (m) => {
       reducedMotionRef.current = m;
-      store.dirty = true;
+      store.invalidate();
     });
   }, [store]);
 
@@ -361,7 +371,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
     };
     colors.clear();
     gradients.key = '';
-    store.dirty = true;
+    store.invalidate();
   }, [colors, gradients, store]);
 
   useEffect(() => {
@@ -427,7 +437,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
   useEffect(() => {
     const interval = setInterval(() => {
       const L = latest.current;
-      for (const ev of store.healthTick(performance.now(), L.anomalyDetection, L.anomalyConfig)) {
+      store.healthTick(performance.now(), L.anomalyDetection, L.anomalyConfig, (ev) => {
         if (ev.kind === 'anomaly') {
           L.onAnomaly?.(ev.id, { ...ev.anomaly });
           const text = `${ev.name}: ${ev.anomaly.message}.`;
@@ -436,7 +446,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
         } else {
           L.onHealthChange?.(ev.id, { ...ev.health });
         }
-      }
+      });
       // The DOM overlays don't need updates nobody can see.
       if (typeof document === 'undefined' || !document.hidden) store.publish();
     }, HEALTH_TICK_MS);
@@ -464,21 +474,15 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
       L.windowSeconds !== undefined &&
       L.windowSeconds > 0 &&
       now - lastDrawRef.current >= 33;
-    if (!store.dirty && !animating && !windowDue) return;
-    store.dirty = false;
+    if (!store.takeDirty() && !animating && !windowDue) return;
     lastDrawRef.current = now;
 
     const dpr = dprRef.current;
-    const result = drawFrame(ctx, canvas.width / dpr, canvas.height / dpr, now, {
-      store,
-      opts: L,
-      theme: themeRef.current,
-      colors,
-      gradients,
-      resolveColor: (c) => resolveCssVar(c, rootRef.current),
-      hover: hoverRef.current,
-      reduceMotion: reducedMotionRef.current,
-    });
+    drawCtx.opts = L;
+    drawCtx.theme = themeRef.current;
+    drawCtx.hover = hoverRef.current;
+    drawCtx.reduceMotion = reducedMotionRef.current;
+    const result = drawFrame(ctx, canvas.width / dpr, canvas.height / dpr, now, drawCtx);
     if (result === 'gone') {
       hoverRef.current = null;
       setHover(null);
@@ -538,7 +542,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
     ctxRef.current = ctx;
     ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
     gradients.key = '';
-    store.dirty = true;
+    store.invalidate();
     const w = Math.round(rect.width);
     const h = Math.round(rect.height);
     setSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
@@ -604,14 +608,14 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
       x: clamp(view.xOf(p.t), 90, view.cssW - 90),
       y: view.primaryToY(p.v),
     });
-    store.dirty = true;
+    store.invalidate();
   };
 
   const clearHover = () => {
     if (!hoverRef.current) return;
     hoverRef.current = null;
     setHover(null);
-    store.dirty = true;
+    store.invalidate();
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {

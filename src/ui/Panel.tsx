@@ -1,6 +1,6 @@
 // src/ui/Panel.tsx — per-agent rate, health and status over the chart.
 
-import React from 'react';
+import { Fragment, type CSSProperties } from 'react';
 import { MAX_PANEL_ROWS } from '../core/constants';
 import type { RowSnapshot } from '../core/store';
 import { formatInt, formatRate, formatStatus } from '../format';
@@ -29,8 +29,8 @@ export function Panel({
       <span className="agentstat-head" style={{ textAlign: 'right' }}>Health</span>
       <span className="agentstat-head">Status</span>
       {shown.map((r) => (
-        <React.Fragment key={r.id}>
-          <span className="agentstat-swatch" style={{ '--c': colorFor(r) } as React.CSSProperties} />
+        <Fragment key={r.id}>
+          <span className="agentstat-swatch" style={{ '--c': colorFor(r) } as CSSProperties} />
           <span className="agentstat-name agentstat-secondary" title={r.name}>
             <bdi>{r.name}</bdi>
           </span>
@@ -40,7 +40,7 @@ export function Panel({
             <StatusIcon status={r.status} />
             {formatStatus(r.status)}
           </span>
-        </React.Fragment>
+        </Fragment>
       ))}
       {rows.length > shown.length && <span className="agentstat-more">+{rows.length - shown.length} more</span>}
     </div>
