@@ -57,8 +57,11 @@ describe.skipIf(!pkg)('built package', () => {
   });
 });
 
-const aiSdk: typeof import('../src/ai-sdk') | null = await import(/* @vite-ignore */ '../dist/ai-sdk.js').catch(() => null);
-const agUi: typeof import('../src/ag-ui') | null = await import(/* @vite-ignore */ '../dist/ag-ui.js').catch(() => null);
+// Paths in variables: the type checker mustn't need dist/ (CI typechecks first).
+const AI_SDK = '../dist/ai-sdk.js';
+const AG_UI = '../dist/ag-ui.js';
+const aiSdk: typeof import('../src/ai-sdk') | null = await import(/* @vite-ignore */ AI_SDK).catch(() => null);
+const agUi: typeof import('../src/ag-ui') | null = await import(/* @vite-ignore */ AG_UI).catch(() => null);
 
 describe.skipIf(!aiSdk || !agUi)('built adapters', () => {
   it('map parts and events', () => {

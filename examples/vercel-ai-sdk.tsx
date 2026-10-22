@@ -1,6 +1,6 @@
 // examples/vercel-ai-sdk.tsx
 //
-// Monitor a Vercel AI SDK (v5+) chat with AgentStat.
+// Monitor a Vercel AI SDK (v5–v7) chat with AgentStat.
 //
 //   npm i ai @ai-sdk/react
 //

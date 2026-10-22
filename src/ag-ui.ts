@@ -14,6 +14,12 @@ export type AgUiEvent = {
   delta?: string;
   toolCallId?: string;
   toolCallName?: string;
+  /** Set on a run started inside another run. */
+  parentRunId?: string;
+  /** Set on events of a subagent's run. */
+  subagentRunId?: string;
+  /** On RUN_ERROR; `'abort'` when the run was stopped. */
+  code?: string;
 };
 
 const estimate = (text: string) => text.length / 4;
@@ -25,7 +31,10 @@ const estimate = (text: string) => text.length / 4;
  * A tool call counts as running from `TOOL_CALL_END` (its arguments are
  * complete) to `TOOL_CALL_RESULT`; the arguments themselves are model output.
  * A tool your frontend runs has no result event in the same run: the run's
- * end closes it.
+ * end closes it. Nested runs and subagent events belong to their own agents
+ * and are left out (a subagent's error is counted). Pass events as AG-UI
+ * clients deliver them (`agent.subscribe`), which expands chunk events (`TEXT_MESSAGE_CHUNK`, `TOOL_CALL_CHUNK`);
+ * raw chunk streams lose tool calls.
  *
  * ```ts
  * const tap = createAgUiTap(stream, 'researcher');
@@ -36,8 +45,23 @@ export function createAgUiTap(sink: EventSink, agentId: string, options: Adapter
   const count = options.countTokens ?? estimate;
   const names = new Map<string, string>();
   const push = (e: AgentEvent) => sink.push(agentId, e);
+  // Runs open inside this agent's run (child runs).
+  let nested = 0;
   return (e) => {
     if (!e || typeof e.type !== 'string') return;
+    if (e.type === 'SUBAGENT_ERROR') return push({ type: 'error' });
+    if (e.subagentRunId) return;
+    if (e.type === 'RUN_STARTED' && e.parentRunId) {
+      nested++;
+      return;
+    }
+    if (nested > 0 && (e.type === 'RUN_FINISHED' || e.type === 'RUN_ERROR')) {
+      nested--;
+      if (e.type === 'RUN_ERROR' && e.code !== 'abort') push({ type: 'error' });
+      return;
+    }
+    // What a child run does is the child's.
+    if (nested > 0) return;
     switch (e.type) {
       case 'RUN_STARTED':
         names.clear();
@@ -62,7 +86,8 @@ export function createAgUiTap(sink: EventSink, agentId: string, options: Adapter
         push({ type: 'tool-end', name: names.get(e.toolCallId ?? '') ?? '' });
         break;
       case 'RUN_ERROR':
-        push({ type: 'error' });
+        // Stopping a run isn't a failure.
+        if (e.code !== 'abort') push({ type: 'error' });
         push({ type: 'finish' });
         break;
       case 'RUN_FINISHED':

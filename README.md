@@ -137,7 +137,7 @@ render is fine.
 
 ### Vercel AI SDK
 
-`@dan-build/agentstat/ai-sdk` (AI SDK v5/v6; no dependency on `ai`, and it
+`@dan-build/agentstat/ai-sdk` (AI SDK v5–v7; no dependency on `ai`, and it
 also runs on the server):
 
 ```tsx
@@ -153,9 +153,14 @@ const result = streamText({ model, prompt, tools });
 await tapAiSdkStream(stream, 'writer', result.fullStream);
 ```
 
-Text, reasoning and tool-call arguments count as output; a tool call is
-`waiting` until its result. Token counts are estimated from characters (~4
-per token); pass `{ countTokens }` for exact ones. Full example:
+Text and reasoning count as output (with the stream taps, tool-call arguments
+too); a tool call is `waiting` until its result. That includes a tool your
+frontend runs or one awaiting approval, after the request ends, so a person
+taking over 5 minutes shows as a stall (`waitingStallMs`). The chat tracker
+doesn't report messages that were there on its first call or that change
+while no request runs (restored history, `setMessages`). Token counts are
+estimated from characters (~4 per token); pass `{ countTokens }` for exact
+ones. Full example:
 [`examples/vercel-ai-sdk.tsx`](./examples/vercel-ai-sdk.tsx).
 
 ### AG-UI
@@ -167,13 +172,20 @@ per token); pass `{ countTokens }` for exact ones. Full example:
 import { createAgUiTap } from '@dan-build/agentstat/ag-ui';
 
 const tap = createAgUiTap(stream, 'researcher');
-agent.subscribe({ onEvent: ({ event }) => tap(event) }); // or call tap() per event
+agent.subscribe({
+  onEvent: ({ event }) => tap(event),
+  // A failed connection sends no event: end the run yourself.
+  onRunFailed: () => tap({ type: 'RUN_ERROR' }),
+});
 ```
 
 Runs map to start/finish (`RUN_ERROR` counts an error), message, reasoning
 and tool-argument deltas to output, and a tool call is `waiting` from
 `TOOL_CALL_END` to `TOOL_CALL_RESULT` (or the end of the run, for tools your
-frontend runs).
+frontend runs). A stopped run (`RUN_ERROR` with code `abort`) isn't counted
+as an error. Nested runs and subagent events are left to their own agents.
+Pass events as the AG-UI client delivers them: it expands `*_CHUNK` events,
+and raw chunk streams lose tool calls.
 
 More integrations — LangChain, WebSocket/SSE, MCP — are in the
 [integration guide](https://agentstat.sdaniel.cc/docs/real-data-integration/).

@@ -26,7 +26,8 @@ describe('createAiSdkTap', () => {
       { type: 'finish' },
     ])
       tap(p);
-    expect(s.types()).toEqual(['start', 'tokens', 'tool-start', 'tool-end', 'start', 'tokens', 'tokens', 'finish']);
+    // One request: `start` opens it (TTFT from here); later steps continue it.
+    expect(s.types()).toEqual(['start', 'tokens', 'tool-start', 'tool-end', 'tokens', 'tokens', 'finish']);
     expect(s.got[1][1]).toEqual({ type: 'tokens', count: 13 / 4 });
     expect(s.got[3][1]).toEqual({ type: 'tool-end', name: 'search', error: false });
     expect(s.got.every(([id]) => id === 'w')).toBe(true);
@@ -37,7 +38,7 @@ describe('createAiSdkTap', () => {
     const tap = createAiSdkTap(s, 'w', { countTokens: () => 1 });
     tap({ type: 'start-step' });
     tap({ type: 'text-delta', delta: 'hi' });
-    tap({ type: 'tool-input-delta', delta: '{"q":' });
+    tap({ type: 'tool-input-delta', inputTextDelta: '{"q":' });
     tap({ type: 'tool-input-available', toolCallId: 'c', toolName: 'fetch' });
     tap({ type: 'tool-output-error', toolCallId: 'c' });
     tap({ type: 'abort' });
@@ -49,6 +50,26 @@ describe('createAiSdkTap', () => {
       { type: 'tool-end', name: 'fetch', error: true },
       { type: 'finish' },
     ]);
+  });
+
+  it('starts at start-step for streams without a start part', () => {
+    const s = sink();
+    const tap = createAiSdkTap(s, 'w');
+    tap({ type: 'start-step' });
+    tap({ type: 'start-step' });
+    tap({ type: 'finish' });
+    tap({ type: 'start-step' });
+    expect(s.types()).toEqual(['start', 'finish', 'start']);
+  });
+
+  it('keeps waiting through preliminary tool results', () => {
+    const s = sink();
+    const tap = createAiSdkTap(s, 'w');
+    tap({ type: 'tool-call', toolCallId: 'c', toolName: 'crawl' });
+    tap({ type: 'tool-result', toolCallId: 'c', preliminary: true });
+    tap({ type: 'tool-result', toolCallId: 'c', preliminary: true });
+    tap({ type: 'tool-result', toolCallId: 'c' });
+    expect(s.types()).toEqual(['tool-start', 'tool-end']);
   });
 
   it('ignores unknown and malformed parts', () => {
@@ -68,6 +89,17 @@ describe('createAiSdkTap', () => {
     }
     await expect(tapAiSdkStream(s, 'w', parts())).rejects.toThrow('network');
     expect(s.types()).toEqual(['start', 'error', 'finish']);
+  });
+
+  it('tapAiSdkStream finishes a stream that ends on an error part', async () => {
+    const s = sink();
+    async function* parts() {
+      yield { type: 'start' };
+      yield { type: 'tool-call', toolCallId: 'c', toolName: 't' };
+      yield { type: 'error' };
+    }
+    await tapAiSdkStream(s, 'w', parts());
+    expect(s.types()).toEqual(['start', 'tool-start', 'error', 'finish']);
   });
 });
 
@@ -112,6 +144,8 @@ describe('createChatTracker', () => {
   it('opens and closes a tool call that finished between two updates', () => {
     const s = sink();
     const track = createChatTracker(s, 'chat');
+    track([], 'submitted');
+    s.got.length = 0;
     track(msg([{ type: 'dynamic-tool', toolName: 'run', toolCallId: 'c', state: 'input-streaming' }]), 'streaming');
     track(msg([{ type: 'dynamic-tool', toolName: 'run', toolCallId: 'c', state: 'output-error' }]), 'streaming');
     expect(s.got.map(([, e]) => e)).toEqual([
@@ -120,9 +154,64 @@ describe('createChatTracker', () => {
     ]);
   });
 
+  it('does not report history present on the first call or replaced while idle', () => {
+    const s = sink();
+    const track = createChatTracker(s, 'chat');
+    const saved = msg([
+      { type: 'text', text: 'x'.repeat(4000) },
+      { type: 'tool-search', toolCallId: 'c', state: 'output-available' },
+    ]);
+    track(saved, 'ready');
+    track(msg([{ type: 'text', text: 'other' }], 'm9'), 'ready'); // setMessages
+    expect(s.got).toEqual([]);
+    track(msg([{ type: 'text', text: 'other' }], 'm9'), 'submitted');
+    expect(s.types()).toEqual(['start']);
+  });
+
+  it('keeps waiting on a frontend tool after the request ends, until its result', () => {
+    const s = sink();
+    const track = createChatTracker(s, 'chat');
+    track([], 'ready');
+    track(msg([]).slice(0, 1), 'submitted');
+    const ask = (state: string) => msg([{ type: 'tool-askUser', toolCallId: 'c', state }]);
+    track(ask('input-available'), 'streaming');
+    track(ask('input-available'), 'ready'); // request over, tool pending
+    expect(s.types()).toEqual(['start', 'tool-start']);
+    track(ask('output-available'), 'ready'); // the person answered
+    expect(s.types()).toEqual(['start', 'tool-start', 'tool-end', 'finish']);
+  });
+
+  it('treats a preliminary result as still running', () => {
+    const s = sink();
+    const track = createChatTracker(s, 'chat');
+    track([], 'ready');
+    track(msg([]).slice(0, 1), 'submitted');
+    const part = (state: string, preliminary?: boolean) => msg([{ type: 'tool-crawl', toolCallId: 'c', state, preliminary }]);
+    track(part('input-available'), 'streaming');
+    track(part('output-available', true), 'streaming');
+    track(part('output-available'), 'streaming');
+    expect(s.types()).toEqual(['start', 'tool-start', 'tool-end']);
+  });
+
+  it('continues from regenerated text after a step is reset', () => {
+    const s = sink();
+    const track = createChatTracker(s, 'chat', { countTokens: (t) => t.length });
+    track([], 'ready');
+    track(msg([]).slice(0, 1), 'submitted');
+    track(msg([{ type: 'text', text: 'abcdef' }]), 'streaming');
+    track(msg([{ type: 'text', text: 'ab' }]), 'streaming'); // reset-step
+    track(msg([{ type: 'text', text: 'abXYZ' }]), 'streaming');
+    expect(s.got.map(([, e]) => e)).toEqual([
+      { type: 'start' },
+      { type: 'tokens', count: 6 },
+      { type: 'tokens', count: 3 },
+    ]);
+  });
+
   it('counts an error and finishes; is idempotent for repeated calls', () => {
     const s = sink();
     const track = createChatTracker(s, 'chat');
+    track([], 'ready');
     track([], 'submitted');
     track([], 'error');
     track([], 'error');
@@ -156,6 +245,39 @@ describe('createAgUiTap', () => {
       { type: 'tool-end', name: 'lookup' },
       { type: 'finish' },
     ]);
+  });
+
+  it('leaves nested runs and subagent events to their own agents', () => {
+    const s = sink();
+    const tap = createAgUiTap(s, 'o', { countTokens: () => 1 });
+    for (const e of [
+      { type: 'RUN_STARTED' },
+      { type: 'TOOL_CALL_START', toolCallId: 'd', toolCallName: 'delegate' },
+      { type: 'TOOL_CALL_END', toolCallId: 'd' },
+      { type: 'RUN_STARTED', parentRunId: 'o' },
+      { type: 'TEXT_MESSAGE_CONTENT', delta: 'child' },
+      { type: 'RUN_FINISHED' },
+      { type: 'TEXT_MESSAGE_CONTENT', delta: 'sub', subagentRunId: 's1' },
+      { type: 'SUBAGENT_ERROR' },
+      { type: 'TOOL_CALL_RESULT', toolCallId: 'd' },
+      { type: 'RUN_FINISHED' },
+    ])
+      tap(e);
+    expect(s.got.map(([, e]) => e)).toEqual([
+      { type: 'start' },
+      { type: 'tool-start', name: 'delegate' },
+      { type: 'error' },
+      { type: 'tool-end', name: 'delegate' },
+      { type: 'finish' },
+    ]);
+  });
+
+  it('does not count a stopped run as an error', () => {
+    const s = sink();
+    const tap = createAgUiTap(s, 'r');
+    tap({ type: 'RUN_STARTED' });
+    tap({ type: 'RUN_ERROR', code: 'abort' });
+    expect(s.types()).toEqual(['start', 'finish']);
   });
 
   it('reports a run error and ends the run', () => {

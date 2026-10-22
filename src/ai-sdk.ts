@@ -1,6 +1,6 @@
 // src/ai-sdk.ts — `@dan-build/agentstat/ai-sdk`
 //
-// Vercel AI SDK (v5/v6) → AgentStat events. No dependency on `ai`: parts are
+// Vercel AI SDK (v5–v7) → AgentStat events. No dependency on `ai`: parts are
 // read structurally, so this works with `streamText().fullStream`, UI message
 // stream chunks and `useChat` messages alike. Framework-free and server-safe.
 
@@ -29,13 +29,19 @@ export type AiSdkPart = {
   type: string;
   text?: string;
   delta?: string;
+  /** Tool-call arguments in UI message stream chunks. */
+  inputTextDelta?: string;
   toolName?: string;
   toolCallId?: string;
+  /** A partial result of a tool that streams its output (still running). */
+  preliminary?: boolean;
 };
 
 /**
  * Returns a function to call with every stream part; it pushes the matching
- * AgentStat events for `agentId`.
+ * AgentStat events for `agentId`. If a stream can end without a `finish` part
+ * (an `error` part ends a failed stream), push `{ type: 'finish' }` yourself
+ * when it ends — or use `tapAiSdkStream`, which does.
  *
  * ```ts
  * const tap = createAiSdkTap(stream, 'writer');
@@ -46,17 +52,24 @@ export function createAiSdkTap(sink: EventSink, agentId: string, options: Adapte
   const count = options.countTokens ?? estimate;
   const names = new Map<string, string>();
   const push = (e: AgentEvent) => sink.push(agentId, e);
+  // Between a request's start and its finish.
+  let running = false;
   return (p) => {
-    if (!p || typeof p.type !== 'string') return;
+    if (!p || typeof p.type !== 'string' || p.preliminary === true) return;
     switch (p.type) {
+      // The request starts at `start`; `start-step` only comes with the
+      // model's first chunk (and later steps continue the same request), so
+      // it starts one only for streams that don't send `start`.
+      case 'start':
       case 'start-step':
-        push({ type: 'start' });
+        if (p.type === 'start' || !running) push({ type: 'start' });
+        running = true;
         break;
       case 'text-delta':
       case 'reasoning-delta':
       case 'tool-input-delta': {
         // Model output: answer, reasoning, or the arguments of a tool call.
-        const text = p.text ?? p.delta;
+        const text = p.text ?? p.delta ?? p.inputTextDelta;
         if (typeof text === 'string' && text) push({ type: 'tokens', count: count(text) });
         break;
       }
@@ -84,6 +97,7 @@ export function createAiSdkTap(sink: EventSink, agentId: string, options: Adapte
       case 'finish':
       case 'abort':
         names.clear();
+        running = false;
         push({ type: 'finish' });
         break;
     }
@@ -92,8 +106,9 @@ export function createAiSdkTap(sink: EventSink, agentId: string, options: Adapte
 
 /**
  * Feed a whole stream (e.g. `result.fullStream`) to `agentId`. Resolves when it
- * ends; a stream that throws is reported as an error and a finish, then the
- * error is rethrown.
+ * ends, finishing the run if the stream didn't (a failed stream ends with an
+ * `error` part and no `finish`); a stream that throws is reported as an error
+ * and a finish, then the error is rethrown.
  */
 export async function tapAiSdkStream(
   sink: EventSink,
@@ -102,20 +117,25 @@ export async function tapAiSdkStream(
   options?: AdapterOptions
 ): Promise<void> {
   const tap = createAiSdkTap(sink, agentId, options);
+  let ended = true;
   try {
-    for await (const p of parts) tap(p);
+    for await (const p of parts) {
+      tap(p);
+      if (p && typeof p.type === 'string') ended = p.type === 'finish' || p.type === 'abort';
+    }
   } catch (err) {
     sink.push(agentId, { type: 'error' });
     sink.push(agentId, { type: 'finish' });
     throw err;
   }
+  if (!ended) sink.push(agentId, { type: 'finish' });
 }
 
 /** A `useChat` message (only the fields AgentStat reads). */
 export type ChatMessage = {
   id: string;
   role: string;
-  parts: { type: string; text?: string; toolCallId?: string; toolName?: string; state?: string }[];
+  parts: { type: string; text?: string; toolCallId?: string; toolName?: string; state?: string; preliminary?: boolean }[];
 };
 
 // Tool part states in which the call has started but not finished.
@@ -126,7 +146,11 @@ const DONE = new Set(['output-available', 'output-error', 'output-denied']);
  * For `useChat`: returns a function to call with `messages` and `status`
  * whenever they change (e.g. in a `useEffect`). It works out what is new
  * since the last call — streamed text, tool calls, the request lifecycle —
- * and pushes it, in stream order, for `agentId`.
+ * and pushes it, in stream order, for `agentId`. Messages that were already
+ * there on the first call, or that change while no request is running
+ * (restored history, `setMessages`), aren't reported as output. A tool your
+ * frontend runs, or one awaiting approval, keeps the agent `waiting` after
+ * the request ends, until its result is added.
  *
  * ```tsx
  * const track = useMemo(() => createChatTracker(stream, 'chat'), [stream]);
@@ -141,43 +165,80 @@ export function createChatTracker(
 ): (messages: readonly ChatMessage[], status: string) => void {
   const count = options.countTokens ?? estimate;
   const push = (e: AgentEvent) => sink.push(agentId, e);
+  const busy = (st: string) => st === 'submitted' || st === 'streaming';
   let id = '';
   let chars = 0;
   let tools = new Map<string, string>();
-  let last = '';
+  let last: string | null = null;
   return (messages, status) => {
-    if (status === 'submitted' && last !== 'submitted') push({ type: 'start' });
     const m = messages[messages.length - 1];
-    if (m?.role === 'assistant' && Array.isArray(m.parts)) {
-      if (m.id !== id) {
-        id = m.id;
+    const assistant = m?.role === 'assistant' && Array.isArray(m.parts) ? m : undefined;
+    const textOf = (x: ChatMessage) =>
+      x.parts.reduce((n, p) => n + (p.type === 'text' || p.type === 'reasoning' ? p.text?.length ?? 0 : 0), 0);
+    const stateOf = (p: ChatMessage['parts'][number]) =>
+      // A preliminary result: the tool is still running.
+      p.state === 'output-available' && p.preliminary === true ? 'input-available' : p.state ?? '';
+    const isTool = (p: ChatMessage['parts'][number]) =>
+      !!p.toolCallId && (p.type.startsWith('tool-') || p.type === 'dynamic-tool');
+    const pending = () => [...tools.values()].some((st) => OPEN.has(st));
+    // First call, or no request running: take the messages as they are
+    // (restored history, setMessages), except that a tool the agent was left
+    // waiting on (a frontend tool, an approval) can resolve.
+    if (last === null || (!busy(status) && !busy(last))) {
+      const waited = last !== null && pending();
+      const before = tools;
+      if (last === null && busy(status)) push({ type: 'start' });
+      id = assistant?.id ?? '';
+      chars = assistant ? textOf(assistant) : 0;
+      tools = new Map();
+      for (const p of assistant?.parts ?? []) {
+        if (!isTool(p)) continue;
+        const state = stateOf(p);
+        tools.set(p.toolCallId as string, state);
+        if (waited && OPEN.has(before.get(p.toolCallId as string) ?? '') && DONE.has(state)) {
+          push({ type: 'tool-end', name: p.toolName ?? p.type.slice('tool-'.length), error: state === 'output-error' });
+        }
+      }
+      if (waited && !pending()) push({ type: 'finish' });
+      last = status;
+      return;
+    }
+    if (status === 'submitted' && last !== 'submitted') push({ type: 'start' });
+    if (assistant) {
+      if (assistant.id !== id) {
+        id = assistant.id;
         chars = 0;
         tools = new Map();
       }
+      // A step was regenerated (parts removed): continue from what's there.
+      const total = textOf(assistant);
+      if (total < chars) chars = total;
       let seen = 0;
       // Text is reported up to each tool event, so output before a tool call
       // isn't counted after it.
       const flush = () => {
-        if (seen > chars) {
-          let text = '';
-          let at = 0;
-          for (const p of m.parts) {
-            if (p.type !== 'text' && p.type !== 'reasoning') continue;
-            const t = p.text ?? '';
-            text += t.slice(Math.max(0, chars - at), Math.max(0, seen - at));
-            at += t.length;
-          }
-          push({ type: 'tokens', count: count(text) });
-          chars = seen;
+        if (seen <= chars) return;
+        let text = '';
+        let at = 0;
+        for (const p of assistant.parts) {
+          if (p.type !== 'text' && p.type !== 'reasoning') continue;
+          const t = p.text ?? '';
+          text += t.slice(Math.max(0, chars - at), Math.max(0, seen - at));
+          at += t.length;
         }
+        push({ type: 'tokens', count: count(text) });
+        chars = seen;
       };
-      for (const p of m.parts) {
+      const present = new Set<string>();
+      for (const p of assistant.parts) {
         if (p.type === 'text' || p.type === 'reasoning') seen += p.text?.length ?? 0;
-        if (!p.toolCallId || (!p.type.startsWith('tool-') && p.type !== 'dynamic-tool')) continue;
-        const state = p.state ?? '';
-        const prev = tools.get(p.toolCallId);
+        if (!isTool(p)) continue;
+        const callId = p.toolCallId as string;
+        present.add(callId);
+        const state = stateOf(p);
+        const prev = tools.get(callId);
         if (prev === state) continue;
-        tools.set(p.toolCallId, state);
+        tools.set(callId, state);
         flush();
         const name = p.toolName ?? p.type.slice('tool-'.length);
         const done = DONE.has(state);
@@ -186,10 +247,12 @@ export function createChatTracker(
         if (done) push({ type: 'tool-end', name, error: state === 'output-error' });
       }
       flush();
+      for (const callId of Array.from(tools.keys())) if (!present.has(callId)) tools.delete(callId);
     }
     if (status !== last) {
       if (status === 'error') push({ type: 'error' });
-      if ((status === 'ready' || status === 'error') && last) push({ type: 'finish' });
+      // A frontend tool or an approval still pending: the agent waits on it.
+      if (status === 'error' || (status === 'ready' && !pending())) push({ type: 'finish' });
     }
     last = status;
   };

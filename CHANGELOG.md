@@ -20,7 +20,7 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
   its stream data over.
 - **Adapters**, as separate entry points with no dependencies (~1 KB each,
   server-safe):
-  - **`@dan-build/agentstat/ai-sdk`** (Vercel AI SDK v5/v6):
+  - **`@dan-build/agentstat/ai-sdk`** (Vercel AI SDK v5–v7):
     `createChatTracker` for `useChat` messages and status, `createAiSdkTap` /
     `tapAiSdkStream` for `streamText().fullStream` and UI message stream
     chunks.
