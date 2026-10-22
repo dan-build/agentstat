@@ -1,8 +1,7 @@
 // SSE transport: createSseHandler (server) → connectSse (browser), end to end
 // through a minimal EventSource that reads the handler's real output.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { createAgentStream, type AgentStreamMessage } from '../src/stream';
-import { createSseHandler, connectSse } from '../src/sse';
+import { createAgentStream, createSseHandler, connectSse, type AgentStreamMessage } from '../src/sse';
 
 type Frame = { id?: string; data?: string };
 
@@ -23,36 +22,55 @@ function parse(text: string): Frame[] {
 }
 
 /** Read what a handler response has streamed so far. */
-async function drain(res: Response): Promise<{ frames: Frame[]; reader: ReadableStreamDefaultReader<Uint8Array> }> {
+async function drain(res: Response): Promise<{ frames: Frame[]; reader: ReadableStreamDefaultReader<Uint8Array>; done: boolean }> {
   const reader = res.body!.getReader();
   const dec = new TextDecoder();
   let text = '';
-  // Everything already enqueued is readable without waiting for more.
+  let done = false;
   for (;;) {
     const r = await Promise.race([reader.read(), new Promise<null>((ok) => setTimeout(() => ok(null), 20))]);
-    if (!r || r.done) break;
+    if (!r) break;
+    if (r.done) {
+      done = true;
+      break;
+    }
     text += dec.decode(r.value);
   }
-  return { frames: parse(text), reader };
+  return { frames: parse(text), reader, done };
 }
 
 /** A minimal EventSource the test drives with frames from the handler. */
 class FakeEventSource {
-  static last: FakeEventSource;
+  static all: FakeEventSource[] = [];
+  static get last() {
+    return FakeEventSource.all[FakeEventSource.all.length - 1];
+  }
   onmessage: ((e: { data: string; lastEventId: string }) => void) | null = null;
-  closed = false;
+  onerror: (() => void) | null = null;
+  readyState = 1;
   constructor(public url: string) {
-    FakeEventSource.last = this;
+    FakeEventSource.all.push(this);
   }
   deliver(frames: Frame[]) {
     for (const f of frames) this.onmessage?.({ data: f.data!, lastEventId: f.id ?? '' });
   }
+  /** An error response: the browser gives up on this EventSource. */
+  fail() {
+    this.readyState = 2;
+    this.onerror?.();
+  }
   close() {
-    this.closed = true;
+    this.readyState = 2;
   }
 }
 
-afterEach(() => vi.unstubAllGlobals());
+const wire = (m: object, extra: object = {}) => JSON.stringify({ m, sent: Date.now(), ...extra });
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+  FakeEventSource.all = [];
+});
 
 describe('createSseHandler', () => {
   it('streams kept history then live messages as server-sent events', async () => {
@@ -61,11 +79,13 @@ describe('createSseHandler', () => {
     const ac = new AbortController();
     const res = await createSseHandler(s)(new Request('http://x/agents', { signal: ac.signal }));
     expect(res.headers.get('content-type')).toMatch(/^text\/event-stream/);
+    expect(res.headers.get('connection')).toBeNull(); // hop-by-hop: not ours to set
     s.push('a', { type: 'tokens', count: 3 });
     const { frames, reader } = await drain(res);
     expect(frames.map((f) => JSON.parse(f.data!).m.type)).toEqual(['event', 'event']);
     expect(frames[0].id).toMatch(/^\w+:1$/);
-    ac.abort(); // the client went away: the subscription ends
+    expect(JSON.parse(frames[0].data!).age).toBeGreaterThanOrEqual(0);
+    ac.abort();
     await reader.cancel().catch(() => {});
   });
 
@@ -88,54 +108,116 @@ describe('createSseHandler', () => {
     expect((await handler(new Request('http://x/'))).status).toBe(404);
     expect((await handler(new Request('http://x/', { headers: { 'x-user': 'ok' } }))).status).toBe(200);
   });
+
+  it('sends a large history, but drops a client that stops reading live messages', async () => {
+    const s = createAgentStream();
+    for (let i = 0; i < 3_000; i++) s.push('a', { type: 'tokens', count: 1 });
+    const res = await createSseHandler(s, { maxQueued: 50 })(new Request('http://x/'));
+    // Nothing read yet: the replay alone doesn't disconnect…
+    for (let i = 0; i < 40; i++) s.push('a', { type: 'tokens', count: 1 });
+    // …but falling 50 live messages behind does.
+    for (let i = 0; i < 20; i++) s.push('a', { type: 'tokens', count: 1 });
+    const { frames, done } = await drain(res);
+    expect(done).toBe(true);
+    expect(frames.length).toBeGreaterThanOrEqual(3_040);
+    expect(frames.length).toBeLessThan(3_060);
+  });
 });
 
 describe('connectSse', () => {
-  it('delivers messages with event times mapped to this page’s clock', async () => {
+  it('delivers messages with event times from their age', async () => {
     vi.stubGlobal('EventSource', FakeEventSource);
     const s = createAgentStream();
     s.push('a', { type: 'tokens', count: 3 });
     const { frames } = await drain(await createSseHandler(s)(new Request('http://x/')));
     const got: AgentStreamMessage[] = [];
-    const off = connectSse('/agents').subscribe((m) => got.push(m));
+    connectSse('/agents').subscribe((m) => got.push(m));
     FakeEventSource.last.deliver(frames);
     expect(got).toHaveLength(1);
     const m = got[0];
     expect(m.type === 'event' && m.event).toMatchObject({ type: 'tokens', count: 3 });
-    // Same machine here: the mapped time is about the original one.
     const t = m.type === 'event' ? m.event.time! : NaN;
     expect(Math.abs(t - performance.now())).toBeLessThan(1_000);
-    off();
-    expect(FakeEventSource.last.closed).toBe(true);
   });
 
-  it('corrects for a server clock that runs ahead', () => {
+  it("ignores the two machines' wall clocks: a server a minute ahead", () => {
     vi.stubGlobal('EventSource', FakeEventSource);
     const got: AgentStreamMessage[] = [];
     connectSse('/agents').subscribe((m) => got.push(m));
-    const ahead = 60_000; // the server's wall clock is a minute fast
-    const sent = Date.now() + ahead;
-    const wire = { m: { seq: 1, type: 'event', id: 'a', event: { type: 'start' } }, at: sent - 500, sent };
-    FakeEventSource.last.deliver([{ id: 'i1:1', data: JSON.stringify(wire) }]);
+    const m = { seq: 1, type: 'event', id: 'a', event: { type: 'start' } };
+    FakeEventSource.last.deliver([{ id: 'i:1', data: wire(m, { age: 500, sent: Date.now() + 60_000 }) }]);
     const t = got[0].type === 'event' ? got[0].event.time! : NaN;
-    // Half a second ago in this page's clock, not a minute in the future.
     expect(performance.now() - t).toBeGreaterThan(400);
     expect(performance.now() - t).toBeLessThan(700);
   });
 
-  it('continues numbering after a server restart and resumes a re-subscribe', () => {
+  it('shares one connection between charts; a late chart gets the history', () => {
     vi.stubGlobal('EventSource', FakeEventSource);
-    const src = connectSse('/agents?team=1');
-    const seqs: number[] = [];
-    src.subscribe((m) => seqs.push(m.seq));
-    const msg = (seq: number) => JSON.stringify({ m: { seq, type: 'remove', id: 'x' }, sent: Date.now() });
+    const src = connectSse('/agents');
+    const a: number[] = [];
+    const b: number[] = [];
+    src.subscribe((m) => a.push(m.seq));
+    const ev = (seq: number) => ({ id: `i:${seq}`, data: wire({ seq, type: 'event', id: 'x', event: { type: 'tokens', count: 1 } }, { age: 0 }) });
+    FakeEventSource.last.deliver([ev(1), ev(2)]);
+    src.subscribe((m) => b.push(m.seq));
+    FakeEventSource.last.deliver([ev(3)]);
+    expect(FakeEventSource.all).toHaveLength(1);
+    expect(a).toEqual([1, 2, 3]);
+    expect(b).toEqual([1, 2, 3]);
+  });
+
+  it('reconnects with backoff after an error response, resuming from the last id', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('EventSource', FakeEventSource);
+    connectSse('/agents').subscribe(() => {});
+    FakeEventSource.last.deliver([{ id: 'i:7', data: wire({ seq: 7, type: 'remove', id: 'x' }) }]);
+    FakeEventSource.last.fail(); // e.g. a 502 from a proxy during a deploy
+    expect(FakeEventSource.all).toHaveLength(1);
+    vi.advanceTimersByTime(1_000);
+    expect(FakeEventSource.all).toHaveLength(2);
+    expect(FakeEventSource.last.url).toBe('/agents?lastEventId=i%3A7');
+    FakeEventSource.last.fail();
+    vi.advanceTimersByTime(1_999);
+    expect(FakeEventSource.all).toHaveLength(2); // backing off
+    vi.advanceTimersByTime(1);
+    expect(FakeEventSource.all).toHaveLength(3);
+  });
+
+  it('skips what a restarted server or another replica replays, and repeats within one', () => {
+    vi.stubGlobal('EventSource', FakeEventSource);
+    const got: AgentStreamMessage[] = [];
+    connectSse('/agents').subscribe((m) => got.push(m));
+    const ev = (inst: string, seq: number, age: number) => ({
+      id: `${inst}:${seq}`,
+      data: wire({ seq, type: 'event', id: 'x', event: { type: 'tokens', count: 1 } }, { age }),
+    });
+    const es = FakeEventSource.last;
+    es.deliver([ev('old', 1, 3_000), ev('old', 2, 2_000), ev('old', 2, 2_000)]); // a repeat
+    es.deliver([ev('new', 1, 3_000), ev('new', 2, 2_000), ev('new', 3, 0)]); // same history, then news
+    expect(got).toHaveLength(3);
+  });
+
+  it('ignores malformed messages', () => {
+    vi.stubGlobal('EventSource', FakeEventSource);
+    const got: AgentStreamMessage[] = [];
+    connectSse('/agents').subscribe((m) => got.push(m));
     FakeEventSource.last.deliver([
-      { id: 'old:1', data: msg(1) },
-      { id: 'old:2', data: msg(2) },
-      { id: 'new:1', data: msg(1) }, // restarted: numbering starts over
+      { id: 'i:1', data: 'not json' },
+      { id: 'i:2', data: wire({ seq: 2, type: 'event', id: 'a' }) }, // no event
+      { id: 'i:3', data: wire({ seq: 3, type: 'nope', id: 'a' }) },
     ]);
-    expect(seqs).toEqual([1, 2, 3]);
-    src.subscribe(() => {}, 3); // the chart re-subscribes after seq 3
-    expect(FakeEventSource.last.url).toBe('/agents?team=1&lastEventId=new%3A1');
+    expect(got).toEqual([]);
+  });
+
+  it('closes the connection a moment after the last chart leaves', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('EventSource', FakeEventSource);
+    const src = connectSse('/agents');
+    const off = src.subscribe(() => {});
+    off();
+    src.subscribe(() => {})(); // a remount within the moment keeps it
+    expect(FakeEventSource.last.readyState).toBe(1);
+    vi.advanceTimersByTime(1_000);
+    expect(FakeEventSource.last.readyState).toBe(2);
   });
 });

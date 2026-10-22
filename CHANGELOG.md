@@ -50,9 +50,13 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
     stream as Server-Sent Events from any Fetch-API server (Next.js route
     handlers, Hono, Bun, Deno, Workers), optionally picking a stream per
     request; `connectSse` is the browser-side source for `<AgentStat
-    source>`. History is replayed on connect, reconnects resume, a
-    restarted server is replayed in full, and event times are corrected for
-    clock skew between server and browser.
+    source>`, one connection however many charts use it. History is
+    replayed on connect; drops and error responses reconnect with backoff
+    and resume; a restarted server's replay isn't shown twice; event times
+    travel as ages, so they don't depend on either machine's clock; a client
+    that stops reading is disconnected instead of buffered. The entry also
+    exports `createAgentStream` for server code (the main entry is
+    client-only).
   - **`@dan-build/agentstat/langchain`** (LangChain.js / LangGraph.js):
     `createLangChainCallbacks` (a callback handler), and
     `tapLangChainStream` / `createLangChainTap` for `streamEvents` v2. An

@@ -67,9 +67,9 @@ const agUi: typeof import('../src/ag-ui') | null = await import(/* @vite-ignore 
 const langchain: typeof import('../src/langchain') | null = await import(/* @vite-ignore */ LANGCHAIN).catch(() => null);
 const sse: typeof import('../src/sse') | null = await import(/* @vite-ignore */ SSE).catch(() => null);
 
-describe.skipIf(!sse || !pkg)('built SSE transport', () => {
+describe.skipIf(!sse)('built SSE transport', () => {
   it('serves a stream as server-sent events', async () => {
-    const stream = pkg!.createAgentStream();
+    const stream = sse!.createAgentStream();
     stream.push('a', { type: 'start' });
     const res = await sse!.createSseHandler(stream)(new Request('http://x/'));
     const reader = res.body!.getReader();
@@ -78,6 +78,17 @@ describe.skipIf(!sse || !pkg)('built SSE transport', () => {
     expect(res.headers.get('content-type')).toMatch(/event-stream/);
     expect(text).toMatch(/id: \w+:1\ndata: \{"m":/);
     await reader.cancel();
+  });
+
+  it('runs on a server: createAgentStream from /sse, no React import', async () => {
+    const FS = 'node:fs'; // no Node types in the test typecheck
+    const { readFileSync } = (await import(/* @vite-ignore */ FS)) as { readFileSync(p: string, e: string): string };
+    expect(readFileSync('dist/sse.js', 'utf8')).not.toMatch(/from ['"]react['"]/);
+    const stream = sse!.createAgentStream();
+    stream.push('a', { type: 'start' });
+    const res = await sse!.createSseHandler(stream)(new Request('http://x/'));
+    expect(res.status).toBe(200);
+    await res.body!.cancel();
   });
 });
 

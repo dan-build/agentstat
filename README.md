@@ -96,8 +96,7 @@ events to the browser over Server-Sent Events with
 
 ```ts
 // server — e.g. app/api/agents/route.ts (any Fetch-API runtime)
-import { createAgentStream } from '@dan-build/agentstat';
-import { createSseHandler } from '@dan-build/agentstat/sse';
+import { createAgentStream, createSseHandler } from '@dan-build/agentstat/sse';
 
 export const stream = createAgentStream(); // feed it with the adapters below
 export const GET = createSseHandler(stream);
@@ -111,12 +110,19 @@ const source = useMemo(() => connectSse('/api/agents'), []);
 <AgentStat source={source} metric="tokens" anomalyDetection />
 ```
 
-A chart that connects gets the stream's last 5 minutes, then live events; it
-reconnects after a drop and resumes where it stopped. Event times are
-corrected for the difference between the server's clock and the browser's.
+Import server code from `@dan-build/agentstat/sse` (or the adapter entries):
+the main entry is client-only. A chart that connects gets the stream's last
+5 minutes, then live events. Charts using the same `connectSse` source share
+one connection. After a drop or an error response (a proxy during a deploy)
+it reconnects with backoff and resumes where it stopped — as far back as the
+stream keeps. Event times don't depend on the two machines' clocks agreeing.
+
 The endpoint exposes your agents' telemetry, so protect it like any route:
 `createSseHandler(request => …)` can pick a stream per request (return
-`undefined` for a 404).
+`undefined` for a 404) — return the same stream object for the same agents
+each time. The stream lives in the server process: several replicas or
+serverless instances each have their own. A client that stops reading is
+disconnected (it reconnects and resumes) rather than buffered.
 
 ### Stream events
 
