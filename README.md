@@ -165,6 +165,37 @@ estimated from characters (~4 per token); pass `{ countTokens }` for exact
 ones. Full example:
 [`examples/vercel-ai-sdk.tsx`](./examples/vercel-ai-sdk.tsx).
 
+### LangChain and LangGraph
+
+`@dan-build/agentstat/langchain` (LangChain.js / LangGraph.js; no dependency on
+`@langchain/*`) works from callbacks or from `streamEvents`:
+
+```ts
+import { bySubgraph, createLangChainCallbacks, tapLangChainStream } from '@dan-build/agentstat/langchain';
+
+// Callbacks: pass to an invocation (once); child runs inherit them.
+await agent.invoke(input, { callbacks: [createLangChainCallbacks(stream, { agentId: 'researcher' })] });
+
+// LangGraph multi-agent: one chart agent per sub-agent (supervisor, swarm).
+await tapLangChainStream(stream, graph.streamEvents(input, { version: 'v2' }), { agentId: bySubgraph('supervisor') });
+```
+
+An agent is busy while it has a model or tool run open — streamed tokens (or
+the reported output tokens of a call that didn't stream), and tool calls as
+`waiting` — and complete once nothing is running; the end of the invocation
+closes whatever it left open, failing the agents if it errored (a stopped
+run, via an AbortSignal, isn't an error). Between its runs an agent counts as busy
+(`thinking` after a tool), so a graph node that works for over 30 s without
+a model or tool call reads as a thinking stall until the run ends.
+`streamEvents` has no error events, so feed it through `tapLangChainStream`
+(or call `tap.end(true)` from `createLangChainTap` when the stream throws).
+
+`agentId` can be a function of the run (`{ name, metadata, tags }`).
+`bySubgraph(fallback)` routes a run to its `createAgent` agent's name, else to
+the LangGraph subgraph it runs in (each agent of a supervisor or swarm), else
+to `fallback`. An agent called from inside a tool routes by name only if it
+has one; nested teams collapse to the outer team.
+
 ### AG-UI
 
 `@dan-build/agentstat/ag-ui` maps AG-UI protocol events (no dependency on

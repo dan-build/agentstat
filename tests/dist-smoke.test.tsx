@@ -60,10 +60,12 @@ describe.skipIf(!pkg)('built package', () => {
 // Paths in variables: the type checker mustn't need dist/ (CI typechecks first).
 const AI_SDK = '../dist/ai-sdk.js';
 const AG_UI = '../dist/ag-ui.js';
+const LANGCHAIN = '../dist/langchain.js';
 const aiSdk: typeof import('../src/ai-sdk') | null = await import(/* @vite-ignore */ AI_SDK).catch(() => null);
 const agUi: typeof import('../src/ag-ui') | null = await import(/* @vite-ignore */ AG_UI).catch(() => null);
+const langchain: typeof import('../src/langchain') | null = await import(/* @vite-ignore */ LANGCHAIN).catch(() => null);
 
-describe.skipIf(!aiSdk || !agUi)('built adapters', () => {
+describe.skipIf(!aiSdk || !agUi || !langchain)('built adapters', () => {
   it('map parts and events', () => {
     const got: string[] = [];
     const sink = { push: (_id: string, e: { type: string }) => got.push(e.type) };
@@ -74,6 +76,9 @@ describe.skipIf(!aiSdk || !agUi)('built adapters', () => {
     const ag = agUi!.createAgUiTap(sink, 'b');
     ag({ type: 'RUN_STARTED' });
     ag({ type: 'RUN_FINISHED' });
-    expect(got).toEqual(['start', 'tool-start', 'tool-end', 'start', 'finish']);
+    const lc = langchain!.createLangChainCallbacks(sink, { agentId: 'c' });
+    lc.handleToolStart({ id: ['x', 'Search'] }, '', 'r1');
+    lc.handleToolEnd(null, 'r1');
+    expect(got).toEqual(['start', 'tool-start', 'tool-end', 'start', 'finish', 'tool-start', 'tool-end', 'finish']);
   });
 });
