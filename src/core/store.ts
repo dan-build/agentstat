@@ -172,6 +172,8 @@ export class AgentStore {
   private _streams = new Map<string, Stream>();
   // History the detectors need for the current config.
   private _detectorHistoryMs = DETECTOR_HISTORY_MS;
+  // Rate at/below which output counts as none (the detectors' current config).
+  private _idleRate = 0.5;
   private _lastTick = 0;
   private _listeners = new Set<() => void>();
 
@@ -361,7 +363,8 @@ export class AgentStore {
       if (log.length > LATENCY_HISTORY) log.splice(0, log.length - LATENCY_HISTORY);
       this._latency.set(id, log);
     }
-    if (status !== undefined) this._setStatus(rec, status, now, cur.tokensRate > 0);
+    // Output only if this sample reports a real rate (not noise, not stale).
+    if (status !== undefined) this._setStatus(rec, status, now, tokensRate !== undefined && tokensRate > this._idleRate);
     if (tokensRate !== undefined || progress !== undefined) this._pushSample(rec, now);
   }
 
@@ -397,6 +400,10 @@ export class AgentStore {
     const setStatus = (st: AgentStatus, output = false) => {
       if (!this._locked.has(id)) this._setStatus(rec, st, t, output);
     };
+    // Before a hand-off clears the window: sample a held-back first chunk.
+    if (e.type === 'start' || e.type === 'tool-start' || e.type === 'finish') {
+      if (s.win.length && s.lastSample < s.win[s.win.length - 2]) this._sampleStream(rec, s, t, false);
+    }
     switch (e.type) {
       case 'start':
         s.tools = [];
@@ -553,7 +560,7 @@ export class AgentStore {
       rec.current.progress = step.progress;
       rec.current.confidenceScore = step.confidenceScore;
       this._simTouched.add(rec.id);
-      this._setStatus(rec, step.status, now, step.tokensRate > 0);
+      this._setStatus(rec, step.status, now, step.tokensRate > this._idleRate);
       this._pushSample(rec, now);
     }
   }
@@ -578,6 +585,7 @@ export class AgentStore {
    */
   healthTick(now: number, detectOn: boolean, cfg: AnomalyConfig, emit: (e: StoreEvent) => void): void {
     for (const ev of this._pendingEvents.splice(0)) emit(ev);
+    this._idleRate = cfg.stallRateThreshold;
     // Keep enough history for the slowest detector rule in this config.
     this._detectorHistoryMs = Math.max(
       DETECTOR_HISTORY_MS,

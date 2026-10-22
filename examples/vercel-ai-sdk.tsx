@@ -7,8 +7,9 @@
 // Forwards the chat's lifecycle, streamed text and tool calls as AgentStat
 // events; AgentStat derives the token rate, time to first token and status
 // (thinking → active → waiting on a tool → … → complete); a failed request
-// or tool call counts an error. Token counts are estimated from streamed characters (~4 per token for English — replace
-// with real counts if your server sends them as message metadata).
+// or tool call counts an error. Token counts are estimated from streamed
+// characters (~4 per token for English — replace with real counts if your
+// server sends them as message metadata).
 //
 // This file isn't type-checked in the AgentStat repo because `ai` isn't one
 // of its dependencies.
@@ -62,7 +63,7 @@ export default function MonitoredChat() {
         if (!OPEN.has(prev ?? '') && (OPEN.has(state) || done)) {
           ref.push(AGENT_ID, { type: 'tool-start', name });
         }
-        if (done) ref.push(AGENT_ID, { type: 'tool-end', name, error: state !== 'output-available' });
+        if (done) ref.push(AGENT_ID, { type: 'tool-end', name, error: state === 'output-error' });
       }
       flush();
     }

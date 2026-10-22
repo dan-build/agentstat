@@ -52,6 +52,19 @@ describe('push: derived values', () => {
     expect(rate).toBeLessThan(50);
   });
 
+  it('samples a held-back first chunk before a hand-off clears it', () => {
+    const s = make();
+    s.push('a', { type: 'start' }, T0);
+    s.push('a', { type: 'tokens', count: 400 }, T0 + 2_000);
+    s.push('a', { type: 'finish' }, T0 + 2_000); // non-streaming response
+    expect(Math.max(...s.tokens.get('a')!.values())).toBeCloseTo(200, 5);
+    const s2 = make();
+    s2.push('a', { type: 'start' }, T0);
+    s2.push('a', { type: 'tokens', count: 50 }, T0 + 1_000);
+    s2.push('a', { type: 'tool-start' }, T0 + 1_050); // short text, then a tool call
+    expect(Math.max(...s2.tokens.get('a')!.values())).toBeGreaterThan(40);
+  });
+
   it('keeps inter-token latency to streaming gaps, not pauses', () => {
     const s = make();
     stream(s, T0, T0 + 2_000, 50, 5); // every 100 ms
@@ -261,6 +274,21 @@ describe('waiting and stalls', () => {
       found.push(...ticks(s, t, t));
     }
     expect(found.some((a) => a.kind === 'stall')).toBe(true);
+  });
+
+  it('does not let a noise-level or stale rate reset the stall clock on thinking → active', () => {
+    for (const late of [{ tokensRate: 0.2 }, {}]) {
+      const s = make();
+      s.ingest('a', { tokensRate: 30, status: 'active' }, T0);
+      for (let t = T0; t < T0 + 15_000; t += 100) s.ingest('a', { tokensRate: 30 }, t);
+      const found: Anomaly[] = [];
+      for (let t = T0 + 15_000; t <= T0 + 90_000; t += 500) {
+        const flip = Math.floor((t - T0) / 6_000) % 2 ? 'thinking' : 'active';
+        s.ingest('a', { ...late, status: flip }, t);
+        found.push(...ticks(s, t, t));
+      }
+      expect(found.some((a) => a.kind === 'stall')).toBe(true);
+    }
   });
 
   it('detectStall: waiting is judged by its length only', () => {
