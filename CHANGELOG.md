@@ -13,6 +13,11 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
   `agents` prop's, which keep their names and colors). `describe(id, …)` sets
   a name, color or band; `remove(id)` takes an agent off. One stream can feed
   several charts. `agents` is now optional.
+- **`AgentSource`**, for your own sources: `subscribe(listener, after)`
+  delivers kept messages with `seq` above `after`, in `seq` order, then live
+  ones. A chart that re-subscribes to the same source (StrictMode) passes the
+  last `seq` it applied, so nothing is applied twice; a different source starts
+  its stream data over.
 
 ## [0.5.0] — 2026-10-22
 

@@ -14,16 +14,43 @@ const legendNames = (c: HTMLElement) =>
   Array.from(c.querySelectorAll('.agentstat-legend button[aria-pressed]')).map((b) => b.textContent?.trim());
 
 describe('createAgentStream', () => {
-  it('replays kept history to a late subscriber, descriptions first, with event times', () => {
+  it('replays kept history to a late subscriber in order, with event times', () => {
     const s = createAgentStream();
-    s.push('a', { type: 'start', time: 100 });
+    const t = performance.now();
+    s.push('a', { type: 'start', time: t - 100 });
     s.push('a', { type: 'tokens', count: 3 });
     s.describe('a', { name: 'Alpha' });
     const got: AgentStreamMessage[] = [];
     s.subscribe((m) => got.push(m));
-    expect(got.map((m) => m.type)).toEqual(['agent', 'event', 'event']);
-    expect(got[1]).toMatchObject({ type: 'event', event: { type: 'start', time: 100 } });
-    expect(got[2].type === 'event' && typeof got[2].event.time).toBe('number');
+    expect(got.map((m) => m.seq)).toEqual([1, 2, 3]);
+    expect(got[0]).toMatchObject({ type: 'event', event: { type: 'start', time: t - 100 } });
+    expect(got[1].type === 'event' && typeof got[1].event.time).toBe('number');
+  });
+
+  it('caps future times at now and warns once about another clock', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const s = createAgentStream();
+    s.push('clk', { type: 'start', time: Date.now() });
+    s.push('clk', { type: 'finish', time: Date.now() });
+    const times: number[] = [];
+    s.subscribe((m) => m.type === 'event' && times.push(m.event.time as number));
+    expect(Math.max(...times)).toBeLessThanOrEqual(performance.now());
+    expect(warn).toHaveBeenCalledTimes(1);
+    vi.restoreAllMocks();
+  });
+
+  it('keeps delivering to other subscribers when one throws', () => {
+    vi.useFakeTimers();
+    const s = createAgentStream();
+    const got: number[] = [];
+    s.subscribe(() => {
+      throw new Error('boom');
+    });
+    s.subscribe((m) => got.push(m.seq));
+    expect(() => s.push('a', { type: 'start' })).not.toThrow();
+    expect(got).toEqual([1]);
+    expect(() => vi.runAllTimers()).toThrow('boom'); // reported, not swallowed
+    vi.useRealTimers();
   });
 
   it('delivers only messages after `after`, then live ones', () => {
@@ -49,16 +76,23 @@ describe('createAgentStream', () => {
     expect(ids).toEqual(['b']);
   });
 
-  it('drops history older than five minutes', () => {
+  it('drops history older than five minutes, past descriptions and while idle', () => {
     let now = 0;
     vi.spyOn(performance, 'now').mockImplementation(() => now);
     const s = createAgentStream();
+    s.describe('a', { name: 'A' });
     s.push('a', { type: 'start' });
+    s.remove('gone');
     now = 301_000;
     s.push('a', { type: 'finish' });
     const got: string[] = [];
-    s.subscribe((m) => m.type === 'event' && got.push(m.event.type));
-    expect(got).toEqual(['finish']);
+    s.subscribe((m) => got.push(m.type === 'event' ? m.event.type : m.type));
+    expect(got).toEqual(['agent', 'finish']); // the description outlives its message
+    // A stream that went quiet: nothing old is replayed an hour later.
+    now = 4_000_000;
+    const late: string[] = [];
+    s.subscribe((m) => late.push(m.type));
+    expect(late).toEqual(['agent']);
     vi.restoreAllMocks();
   });
 });
@@ -81,9 +115,10 @@ describe('<AgentStat source>', () => {
     expect(legendNames(container)).toEqual(['Lead', 'Worker 1']);
   });
 
-  it('applies history once under StrictMode', async () => {
+  it('applies history once under StrictMode, with a description sent before mount', async () => {
     const s = createAgentStream();
     s.push('a', { type: 'tokens', count: 10 });
+    s.describe('a', { name: 'A' });
     const ref = createRef<AgentStatRef>();
     render(
       <StrictMode>
@@ -97,9 +132,9 @@ describe('<AgentStat source>', () => {
 
   it('feeds events for a prop agent into it, keeping replayed times', async () => {
     const s = createAgentStream();
-    const t0 = performance.now();
-    s.push('lead', { type: 'start', time: t0 });
-    s.push('lead', { type: 'tokens', count: 8, time: t0 + 500 });
+    s.push('lead', { type: 'start' });
+    await tick(500);
+    s.push('lead', { type: 'tokens', count: 8 });
     await tick(5_000); // the chart mounts later
     const ref = createRef<AgentStatRef>();
     render(<AgentStat ref={ref} agents={[createAgent('lead', 'Lead')]} source={s} />);
@@ -120,6 +155,31 @@ describe('<AgentStat source>', () => {
     rerender(<AgentStat source={b} />);
     await tick(10);
     expect(legendNames(container)).toEqual(['y']);
+  });
+
+  it('does not double-count prop agents when the source changes back or is recreated', async () => {
+    const a = createAgentStream();
+    const b = createAgentStream();
+    a.push('lead', { type: 'tokens', count: 8 });
+    const ref = createRef<AgentStatRef>();
+    const agents = [createAgent('lead', 'Lead')];
+    const { rerender } = render(<AgentStat ref={ref} agents={agents} source={a} />);
+    await tick(10);
+    rerender(<AgentStat ref={ref} agents={agents} source={b} />);
+    await tick(10);
+    expect(ref.current!.getStats('lead')!.totalTokens).toBe(0);
+    rerender(<AgentStat ref={ref} agents={agents} source={a} />);
+    await tick(10);
+    expect(ref.current!.getStats('lead')!.totalTokens).toBe(8);
+    // An inline wrapper is a new source on every render: replayed, not added up.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (let i = 0; i < 3; i++) {
+      rerender(<AgentStat ref={ref} agents={agents} source={{ subscribe: a.subscribe }} />);
+      await tick(10);
+    }
+    expect(ref.current!.getStats('lead')!.totalTokens).toBe(8);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('changed 3 times'));
+    warn.mockRestore();
   });
 
   it('keeps source agents when the agents prop changes', async () => {

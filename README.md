@@ -76,9 +76,15 @@ stream.remove('coder');                      // optional
 ```
 
 The stream keeps the last 5 minutes of events, and a chart that mounts later
-replays them at their original times. Agents in the `agents` prop come first
-(and their names and colors win); stream agents follow in arrival order. The
-event types are those of `push` below.
+replays them at their original times (`time`, if you pass one, uses the
+`performance.now()` clock). Agents in the `agents` prop come first (and their
+names and colors win); stream agents follow in arrival order, including an
+agent you removed from the prop if its events keep coming. The event types are
+those of `push` below.
+
+Create the stream once — `useAgentStream()`, or at module scope — and pass the
+same object on every render: a different `source` starts the chart's stream
+data over and replays the new one's history.
 
 ### Stream events
 

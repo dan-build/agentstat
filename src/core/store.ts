@@ -149,6 +149,8 @@ export class AgentStore {
   private _props = new Map<string, Agent>();
   // Agents added by a stream source (not in the agents prop), in arrival order.
   private _auto = new Set<string>();
+  // Prop agents that received source events (reset when the source changes).
+  private _sourced = new Set<string>();
   private _latency = new Map<string, number[]>();
   private _health = new Map<string, HealthMetrics>();
   private _episodes = new Map<string, Map<AnomalyKind, Episode>>();
@@ -248,27 +250,53 @@ export class AgentStore {
    * no data yet back to `t`, so replayed history isn't squashed into the
    * moment the chart mounted.
    */
-  ensure(id: string, t: number): void {
+  ensure(id: string, t: number, now: number): void {
+    t = Math.min(t, now);
     const rec = this.byId.get(id);
     if (!rec) {
       this._create({ id, name: id, current: { tokensRate: 0, progress: 0, status: 'complete' } }, t);
       this._auto.add(id);
       this.list = [...this.list, this.byId.get(id) as AgentRecord];
       this.dirty = true;
-    } else if (
+      return;
+    }
+    if (
       t < (this._statusSince.get(id) ?? t) &&
       this.tokens.get(id)?.length === 1 &&
       !this._statusReported.has(id) &&
       !this._streams.has(id)
     ) {
-      this._create(toAgent(rec), t);
-      this.list = this.list.map((r) => (r.id === id ? (this.byId.get(id) as AgentRecord) : r));
+      this._recreate(id, toAgent(rec), t);
     }
+    if (!this._auto.has(id)) this._sourced.add(id);
+  }
+
+  /** Start an agent over from `a` at `t` (all derived state goes). */
+  private _recreate(id: string, a: Agent, t: number): void {
+    const visible = this.byId.get(id)?.visible ?? true;
+    this._drop(id);
+    const rec = this._create(a, t);
+    rec.visible = visible;
+    this.list = this.list.map((r) => (r.id === id ? rec : r));
+    this.dirty = true;
+  }
+
+  /**
+   * A new source: its history will be replayed from the start, so what the
+   * previous one fed goes — its agents, and the data of prop agents it fed.
+   */
+  resetSource(now: number): void {
+    this.removeAuto();
+    for (const id of this._sourced) {
+      const a = this._props.get(id);
+      if (a && this.byId.has(id)) this._recreate(id, a, now);
+    }
+    this._sourced.clear();
   }
 
   /** Name, color or band for a source-added agent (the agents prop wins). */
   describe(id: string, d: { name?: string; color?: string; config?: Agent['config'] }, now: number): void {
-    this.ensure(id, now);
+    this.ensure(id, now, now);
     const rec = this.byId.get(id);
     if (!rec || this._props.has(id)) return;
     if (typeof d.name === 'string') rec.name = d.name;
@@ -314,6 +342,7 @@ export class AgentStore {
     this._statusReported.delete(id);
     this._statusSince.delete(id);
     this._workSince.delete(id);
+    this._sourced.delete(id);
     this._streams.delete(id);
     this._sim.delete(id);
   }
