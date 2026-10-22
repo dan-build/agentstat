@@ -202,8 +202,9 @@ export class TimeSeriesBuffer {
    * Samples within the last `windowMs` (relative to `now`; all samples when
    * undefined) and not after `now`. Slices longer than `targetPoints` are
    * downsampled to `targetPoints / 4` time columns, keeping each column's
-   * first, last, minimum and maximum sample (M4): at most `targetPoints`
-   * points, with every column's extremes kept.
+   * first, last, minimum and maximum sample (M4): at most
+   * `max(targetPoints, 4)` points, always fewer than the slice, with every
+   * column's extremes kept.
    *
    * Cached. Exact results are keyed on the slice bounds, so every new or
    * expired sample shows immediately. Downsampled results are keyed on a

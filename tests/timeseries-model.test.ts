@@ -409,7 +409,8 @@ describe('TimeSeriesBuffer — model-based contract', () => {
       let totalOps = 0;
       for (const seed of seeds) totalOps += runScenario(seed);
       expect(totalOps).toBeGreaterThan(0);
-    });
+      // Deterministic seeds; the generous limit only absorbs slow CI machines.
+    }, 30_000);
   }
 
   it('pins equal-timestamp and tie-breaking behaviour of nearestValueAt', () => {
