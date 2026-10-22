@@ -171,21 +171,27 @@ ones. Full example:
 `@langchain/*`) works from callbacks or from `streamEvents`:
 
 ```ts
-import { bySubgraph, createLangChainCallbacks, createLangChainTap } from '@dan-build/agentstat/langchain';
+import { bySubgraph, createLangChainCallbacks, tapLangChainStream } from '@dan-build/agentstat/langchain';
 
-// Callbacks: pass to any invocation.
+// Callbacks: pass to an invocation (once); child runs inherit them.
 await agent.invoke(input, { callbacks: [createLangChainCallbacks(stream, { agentId: 'researcher' })] });
 
 // LangGraph multi-agent: one chart agent per sub-agent (supervisor, swarm).
-const tap = createLangChainTap(stream, { agentId: bySubgraph('supervisor') });
-for await (const e of graph.streamEvents(input, { version: 'v2' })) tap(e);
+await tapLangChainStream(stream, graph.streamEvents(input, { version: 'v2' }), { agentId: bySubgraph('supervisor') });
 ```
 
-A model call shows as start → output → complete (streamed tokens, or its
-reported output tokens if it didn't stream), a tool call as `waiting`, and the
-end of the outermost run finishes every agent it used. `agentId` can be a
-function of the run (`{ name, metadata, tags }`); `bySubgraph(fallback)`
-routes runs inside a LangGraph subgraph to the subgraph's node name.
+An agent is busy while it has a model or tool run open — streamed tokens (or
+the reported output tokens of a call that didn't stream), and tool calls as
+`waiting` — and complete once nothing is running; the end of the invocation
+closes whatever it left open, failing the agents if it errored.
+`streamEvents` has no error events, so feed it through `tapLangChainStream`
+(or call `tap.end(true)` from `createLangChainTap` when the stream throws).
+
+`agentId` can be a function of the run (`{ name, metadata, tags }`).
+`bySubgraph(fallback)` routes a run to its `createAgent` agent's name, else to
+the LangGraph subgraph it runs in (each agent of a supervisor or swarm), else
+to `fallback`. An agent called from inside a tool routes by name only if it
+has one; nested teams collapse to the outer team.
 
 ### AG-UI
 

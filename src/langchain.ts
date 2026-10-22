@@ -18,7 +18,7 @@ export type LangChainRun = {
 };
 
 /** A fixed agent id, or one chosen per run (e.g. `bySubgraph('graph')`). */
-export type AgentIdFor = string | ((run: LangChainRun) => string);
+export type AgentIdFor = string | ((run: LangChainRun) => string | undefined);
 
 export interface LangChainOptions extends AdapterOptions {
   agentId: AgentIdFor;
@@ -27,16 +27,23 @@ export interface LangChainOptions extends AdapterOptions {
 const estimate = (text: string) => text.length / 4;
 
 /**
- * Route LangGraph runs inside a subgraph (e.g. each agent of a supervisor or
- * swarm) to the subgraph's node name; everything else to `fallback`.
+ * Route each run to the agent it belongs to in a multi-agent setup: the
+ * agent's name for `createAgent` agents (`lc_agent_name`), else the
+ * subgraph's node name for runs inside a LangGraph subgraph (each agent of a
+ * supervisor or swarm), else `fallback`. An agent called from inside a tool
+ * is routed by its name only if it has one.
  */
 export const bySubgraph =
   (fallback: string) =>
   (run: LangChainRun): string => {
+    const name = run.metadata?.lc_agent_name;
+    if (typeof name === 'string' && name) return name;
     const ns = run.metadata?.langgraph_checkpoint_ns;
     const parts = typeof ns === 'string' ? ns.split('|') : [];
-    return parts.length > 1 ? parts[0].split(':')[0] || fallback : fallback;
+    return (parts.length > 1 && parts[0].split(':')[0]) || fallback;
   };
+
+const str = (v: unknown) => (typeof v === 'string' ? v : '');
 
 /** Text in a message chunk or generation: content, reasoning, tool-call arguments. */
 function textOf(x: unknown): string {
@@ -51,26 +58,26 @@ function textOf(x: unknown): string {
       if (typeof b === 'string') out += b;
       else if (b && typeof b === 'object') {
         const r = b as Record<string, unknown>;
-        for (const k of ['text', 'thinking', 'reasoning']) if (typeof r[k] === 'string') out += r[k];
+        out += str(r.text) + str(r.thinking) + str(r.reasoning) + str((r.reasoningText as { text?: unknown })?.text);
       }
     }
-  } else if (typeof o.text === 'string') out += o.text;
-  if (Array.isArray(o.tool_call_chunks)) {
-    for (const c of o.tool_call_chunks)
-      if (c && typeof (c as { args?: unknown }).args === 'string') out += (c as { args: string }).args;
-  }
+  } else out += str(o.text);
+  // Reasoning of OpenAI-compatible servers (DeepSeek, Qwen, vLLM).
+  out += str((o.additional_kwargs as { reasoning_content?: unknown })?.reasoning_content);
+  if (Array.isArray(o.tool_call_chunks)) for (const c of o.tool_call_chunks) out += str(c?.args);
   return out;
 }
 
+type Output = {
+  usage_metadata?: { output_tokens?: number };
+  tool_calls?: unknown[];
+  llmOutput?: { tokenUsage?: { completionTokens?: number } };
+  generations?: { text?: string; message?: Output }[][];
+} | null;
+
 /** Output tokens a finished model run reported, if any. */
 function outputTokens(output: unknown): number | undefined {
-  const o = output as {
-    llmOutput?: { tokenUsage?: { completionTokens?: number } };
-    generations?: {
-      message?: { usage_metadata?: { output_tokens?: number } };
-    }[][];
-    usage_metadata?: { output_tokens?: number };
-  } | null;
+  const o = output as Output;
   const n =
     o?.usage_metadata?.output_tokens ??
     o?.generations?.[0]?.[0]?.message?.usage_metadata?.output_tokens ??
@@ -80,92 +87,158 @@ function outputTokens(output: unknown): number | undefined {
 
 /** Text of a finished model run (for runs that didn't stream). */
 function outputText(output: unknown): string {
-  const o = output as {
-    generations?: { text?: string; message?: unknown }[][];
-  } | null;
-  const g = o?.generations?.[0]?.[0];
-  if (g) return typeof g.text === 'string' && g.text ? g.text : textOf(g.message);
+  const g = (output as Output)?.generations?.[0]?.[0];
+  if (g) return str(g.text) || textOf(g.message);
   return textOf(output);
 }
 
+/** Whether a finished model run asked for tools (its agent goes on to run them). */
+const callsTools = (output: unknown): boolean => {
+  const o = output as Output;
+  return !!(o?.tool_calls?.length || o?.generations?.[0]?.[0]?.message?.tool_calls?.length);
+};
+
+type Kind = 'model' | 'tool' | 'chain';
+type Run = { kind: Kind; root: string; agent?: string; name: string; streamed: boolean };
+
 /**
- * Shared state machine: model runs → start / tokens / finish, tool runs →
- * waiting, the top-level run's end → finish.
+ * Shared state machine. An agent starts when its first model or tool run
+ * opens and finishes when its last one closes (a model run that asked for
+ * tools hands over to them instead). The end of the outermost run (the root)
+ * closes whatever it left open. `implicitRoot`: events carry no parent ids
+ * (streamEvents), so everything belongs to the first run until it ends.
  */
-function createMapper(sink: EventSink, options: LangChainOptions) {
+function createMapper(sink: EventSink, options: LangChainOptions, implicitRoot: boolean) {
   const count = options.countTokens ?? estimate;
   const pick = options.agentId;
-  // Agent of each open run, and whether a model run has streamed.
-  const agents = new Map<string, string>();
-  const streamed = new Set<string>();
-  const toolNames = new Map<string, string>();
-  // Agents with a run in progress (not finished), and the outermost run.
+  const runs = new Map<string, Run>();
+  // Open model/tool runs per agent; agents not finished; agents per root.
+  const open = new Map<string, number>();
   const busy = new Set<string>();
-  let root: string | undefined;
-  const push = (runId: string, e: AgentEvent) => {
-    const id = agents.get(runId);
-    if (id === undefined) return;
+  const byRoot = new Map<string, Set<string>>();
+  let current: string | undefined;
+
+  const emit = (id: string, e: AgentEvent) => {
     if (e.type === 'finish') busy.delete(id);
     else busy.add(id);
-    sink.push(id, e);
+    try {
+      sink.push(id, e);
+    } catch (err) {
+      // A failing sink must not break the run it observes.
+      setTimeout(() => {
+        throw err;
+      });
+    }
   };
-  const open = (runId: string, run: LangChainRun) => {
-    const id = typeof pick === 'function' ? pick(run) : pick;
-    if (typeof id === 'string' && id) agents.set(runId, id);
+
+  const begin = (runId: string, parentRunId: string | undefined, kind: Kind, run: LangChainRun): Run | undefined => {
+    // A second start for an open run: the handler is attached twice.
+    if (runs.has(runId)) return undefined;
+    const parent = parentRunId === undefined ? undefined : runs.get(parentRunId);
+    // A run whose parent this handler never saw (or that has none) is a root.
+    const root = parent ? parent.root : implicitRoot && current !== undefined ? current : runId;
+    if (implicitRoot && current === undefined) current = root;
+    let agent: string | undefined;
+    if (kind !== 'chain') {
+      const id = typeof pick === 'function' ? pick(run) : pick;
+      if (typeof id === 'string' && id) agent = id;
+    }
+    const r: Run = { kind, root, agent, name: run.name ?? '', streamed: false };
+    runs.set(runId, r);
+    if (agent) {
+      open.set(agent, (open.get(agent) ?? 0) + 1);
+      const set = byRoot.get(root) ?? new Set<string>();
+      set.add(agent);
+      byRoot.set(root, set);
+    }
+    return r;
   };
-  const close = (runId: string) => {
-    agents.delete(runId);
-    streamed.delete(runId);
-    toolNames.delete(runId);
+
+  /** Close a run; returns its agent if that agent has nothing else open. */
+  const close = (runId: string, r: Run): string | undefined => {
+    runs.delete(runId);
+    if (!r.agent) return undefined;
+    const n = (open.get(r.agent) ?? 1) - 1;
+    if (n > 0) {
+      open.set(r.agent, n);
+      return undefined;
+    }
+    open.delete(r.agent);
+    return r.agent;
   };
+
+  const endRoot = (rootId: string, error: boolean) => {
+    // Runs it left open (no end event came) close with it.
+    for (const [id, r] of Array.from(runs)) if (r.root === rootId) close(id, r);
+    for (const agent of byRoot.get(rootId) ?? []) {
+      if (open.has(agent) || !busy.has(agent)) continue;
+      if (error) emit(agent, { type: 'error' });
+      emit(agent, { type: 'finish' });
+    }
+    byRoot.delete(rootId);
+    if (current === rootId) current = undefined;
+  };
+
+  const ended = (runId: string, r: Run, error: boolean) => {
+    if (r.root === runId) endRoot(runId, error);
+  };
+
   return {
-    /** A run started with no parent: its end ends everything under it. */
-    rootStart(runId: string) {
-      if (root === undefined) root = runId;
+    chainStart(runId: string, parentRunId?: string) {
+      begin(runId, parentRunId, 'chain', {});
     },
-    rootEnd(runId: string) {
-      if (runId !== root) return;
-      root = undefined;
-      // E.g. a tool returned and the run ended without another model call.
-      for (const id of busy) sink.push(id, { type: 'finish' });
-      busy.clear();
+    chainEnd(runId: string, error: boolean) {
+      const r = runs.get(runId);
+      if (!r) return;
+      runs.delete(runId);
+      ended(runId, r, error);
     },
-    modelStart(runId: string, run: LangChainRun) {
-      open(runId, run);
-      push(runId, { type: 'start' });
+    modelStart(runId: string, parentRunId: string | undefined, run: LangChainRun) {
+      const r = begin(runId, parentRunId, 'model', run);
+      // Only the agent's first open run starts it (concurrent calls, or a
+      // model inside a tool, continue what's running).
+      if (r?.agent && open.get(r.agent) === 1) emit(r.agent, { type: 'start' });
     },
     token(runId: string, text: string) {
-      if (!text) return;
-      streamed.add(runId);
-      push(runId, { type: 'tokens', count: count(text) });
+      const r = runs.get(runId);
+      if (!r?.agent || !text) return;
+      r.streamed = true;
+      emit(r.agent, { type: 'tokens', count: count(text) });
     },
-    modelEnd(runId: string, output: unknown) {
-      // A model that didn't stream: its whole output arrives now.
-      if (!streamed.has(runId)) {
-        const n = outputTokens(output) ?? count(outputText(output));
-        if (n > 0) push(runId, { type: 'tokens', count: n });
+    modelEnd(runId: string, output: unknown, error = false) {
+      const r = runs.get(runId);
+      if (!r) return;
+      if (r.agent) {
+        if (error) emit(r.agent, { type: 'error' });
+        // A model that didn't stream: its whole output arrives now.
+        else if (!r.streamed) {
+          const n = outputTokens(output) ?? count(outputText(output));
+          if (n > 0) emit(r.agent, { type: 'tokens', count: n });
+        }
       }
-      // The call is done; what follows (a tool, the next call) reports itself.
-      push(runId, { type: 'finish' });
-      close(runId);
+      const idle = close(runId, r);
+      if (idle && (error || !callsTools(output))) emit(idle, { type: 'finish' });
+      ended(runId, r, error);
     },
-    modelError(runId: string) {
-      push(runId, { type: 'error' });
-      push(runId, { type: 'finish' });
-      close(runId);
-    },
-    toolStart(runId: string, run: LangChainRun) {
-      open(runId, run);
-      toolNames.set(runId, run.name ?? '');
-      push(runId, { type: 'tool-start', name: run.name ?? '' });
+    toolStart(runId: string, parentRunId: string | undefined, run: LangChainRun) {
+      const r = begin(runId, parentRunId, 'tool', run);
+      if (r?.agent) emit(r.agent, { type: 'tool-start', name: r.name });
     },
     toolEnd(runId: string, error: boolean) {
-      push(runId, {
-        type: 'tool-end',
-        name: toolNames.get(runId) ?? '',
-        error,
-      });
-      close(runId);
+      const r = runs.get(runId);
+      if (!r) return;
+      if (r.agent) emit(r.agent, { type: 'tool-end', name: r.name, error });
+      // Nothing else open: e.g. a supervisor handed off to a sub-agent.
+      const idle = close(runId, r);
+      if (idle) emit(idle, { type: 'finish' });
+      ended(runId, r, error);
+    },
+    /** End everything (a stream that stopped or threw). */
+    endAll(error: boolean) {
+      for (const root of Array.from(new Set([...byRoot.keys(), ...[...runs.values()].map((r) => r.root)]))) {
+        endRoot(root, error);
+      }
+      runs.clear();
     },
   };
 }
@@ -179,18 +252,22 @@ const nameOf = (serialized: unknown, runName?: string): string | undefined => {
 
 type Meta = Record<string, unknown>;
 
-/** The callback methods AgentStat implements (LangChain's handler signatures). */
+/**
+ * The callback methods AgentStat implements, with the argument order LangChain
+ * calls them with.
+ */
 export interface LangChainCallbackHandler {
   name: string;
+  awaitHandlers: boolean;
   handleChainStart(
     chain: unknown,
     inputs: unknown,
     runId: string,
-    runType?: string,
+    parentRunId?: string,
     tags?: string[],
     metadata?: Meta,
-    runName?: string,
-    parentRunId?: string
+    runType?: string,
+    runName?: string
   ): void;
   handleChainEnd(outputs: unknown, runId: string): void;
   handleChainError(err: unknown, runId: string): void;
@@ -220,7 +297,7 @@ export interface LangChainCallbackHandler {
     runId: string,
     parentRunId?: string,
     tags?: string[],
-    fields?: { chunk?: { message?: unknown } }
+    fields?: { chunk?: unknown }
   ): void;
   handleLLMEnd(output: unknown, runId: string): void;
   handleLLMError(err: unknown, runId: string): void;
@@ -238,104 +315,62 @@ export interface LangChainCallbackHandler {
 }
 
 /**
- * A callback handler to pass in `callbacks` (of a model, tool, agent or graph
- * invocation). Model calls show as start → output → complete, tool calls as
- * `waiting`.
+ * A callback handler to pass in `callbacks` of an invocation (agent, graph,
+ * model or tool); child runs inherit it. Attach it once per invocation.
+ * Model calls show as start → output, tool calls as `waiting`; an agent is
+ * complete once it has nothing running, and the end of the invocation
+ * finishes (or, on error, fails) every agent it used.
  *
  * ```ts
  * const callbacks = [createLangChainCallbacks(stream, { agentId: 'researcher' })];
  * await agent.invoke(input, { callbacks });
- * // LangGraph supervisor: one chart agent per sub-agent
+ * // LangGraph supervisor or swarm: one chart agent per sub-agent
  * await graph.invoke(input, { callbacks: [createLangChainCallbacks(stream, { agentId: bySubgraph('supervisor') })] });
  * ```
  */
 export function createLangChainCallbacks(sink: EventSink, options: LangChainOptions): LangChainCallbackHandler {
-  const m = createMapper(sink, options);
-  const run = (
-    serialized: unknown,
-    metadata?: Record<string, unknown>,
-    tags?: string[],
-    runName?: string
-  ): LangChainRun => ({
+  const m = createMapper(sink, options, false);
+  const run = (serialized: unknown, metadata?: Meta, tags?: string[], runName?: string): LangChainRun => ({
     name: nameOf(serialized, runName),
     metadata,
     tags,
   });
   return {
     name: 'agentstat',
-    handleChainStart(
-      _chain: unknown,
-      _inputs: unknown,
-      runId: string,
-      _runType?: string,
-      _tags?: string[],
-      _metadata?: unknown,
-      _runName?: string,
-      parentRunId?: string
-    ) {
-      if (!parentRunId) m.rootStart(runId);
+    // Run in order with the invocation, so event times are when things
+    // happened (and nothing is still queued when a serverless handler returns).
+    awaitHandlers: true,
+    handleChainStart(_chain, _inputs, runId, parentRunId) {
+      m.chainStart(runId, parentRunId);
     },
-    handleChainEnd(_outputs: unknown, runId: string) {
-      m.rootEnd(runId);
+    handleChainEnd(_outputs, runId) {
+      m.chainEnd(runId, false);
     },
-    handleChainError(_err: unknown, runId: string) {
-      m.rootEnd(runId);
+    handleChainError(_err, runId) {
+      m.chainEnd(runId, true);
     },
-    handleChatModelStart(
-      llm: unknown,
-      _messages: unknown,
-      runId: string,
-      _parentRunId?: string,
-      _extra?: unknown,
-      tags?: string[],
-      metadata?: Record<string, unknown>,
-      runName?: string
-    ) {
-      m.modelStart(runId, run(llm, metadata, tags, runName));
+    handleChatModelStart(llm, _messages, runId, parentRunId, _extra, tags, metadata, runName) {
+      m.modelStart(runId, parentRunId, run(llm, metadata, tags, runName));
     },
-    handleLLMStart(
-      llm: unknown,
-      _prompts: unknown,
-      runId: string,
-      _parentRunId?: string,
-      _extra?: unknown,
-      tags?: string[],
-      metadata?: Record<string, unknown>,
-      runName?: string
-    ) {
-      m.modelStart(runId, run(llm, metadata, tags, runName));
+    handleLLMStart(llm, _prompts, runId, parentRunId, _extra, tags, metadata, runName) {
+      m.modelStart(runId, parentRunId, run(llm, metadata, tags, runName));
     },
-    handleLLMNewToken(
-      token: string,
-      _idx: unknown,
-      runId: string,
-      _p?: string,
-      _t?: string[],
-      fields?: { chunk?: { message?: unknown } }
-    ) {
-      m.token(runId, token || textOf(fields?.chunk?.message));
+    handleLLMNewToken(token, _idx, runId, _parentRunId, _tags, fields) {
+      m.token(runId, token || textOf((fields?.chunk as { message?: unknown } | undefined)?.message));
     },
-    handleLLMEnd(output: unknown, runId: string) {
+    handleLLMEnd(output, runId) {
       m.modelEnd(runId, output);
     },
-    handleLLMError(_err: unknown, runId: string) {
-      m.modelError(runId);
+    handleLLMError(_err, runId) {
+      m.modelEnd(runId, undefined, true);
     },
-    handleToolStart(
-      tool: unknown,
-      _input: unknown,
-      runId: string,
-      _parentRunId?: string,
-      tags?: string[],
-      metadata?: Record<string, unknown>,
-      runName?: string
-    ) {
-      m.toolStart(runId, run(tool, metadata, tags, runName));
+    handleToolStart(tool, _input, runId, parentRunId, tags, metadata, runName) {
+      m.toolStart(runId, parentRunId, run(tool, metadata, tags, runName));
     },
-    handleToolEnd(_output: unknown, runId: string) {
+    handleToolEnd(_output, runId) {
       m.toolEnd(runId, false);
     },
-    handleToolError(_err: unknown, runId: string) {
+    handleToolError(_err, runId) {
       m.toolEnd(runId, true);
     },
   };
@@ -351,29 +386,27 @@ export type LangChainStreamEvent = {
   data?: { chunk?: unknown; output?: unknown };
 };
 
+/** A tap for one `streamEvents` call; `end()` closes what it left open. */
+export interface LangChainTap {
+  (event: LangChainStreamEvent): void;
+  /** The stream stopped (or threw: `error` true) — end its runs. */
+  end(error?: boolean): void;
+}
+
 /**
- * Returns a function to call with every `streamEvents` (v2) event.
- *
- * ```ts
- * const tap = createLangChainTap(stream, { agentId: bySubgraph('graph') });
- * for await (const e of graph.streamEvents(input, { version: 'v2' })) tap(e);
- * ```
+ * Returns a function to call with every event of one `streamEvents` (v2)
+ * call. streamEvents has no error events: when the stream throws or you stop
+ * reading it, call `tap.end(true)` — or use `tapLangChainStream`, which does.
  */
-export function createLangChainTap(sink: EventSink, options: LangChainOptions): (event: LangChainStreamEvent) => void {
-  const m = createMapper(sink, options);
-  return (e) => {
+export function createLangChainTap(sink: EventSink, options: LangChainOptions): LangChainTap {
+  const m = createMapper(sink, options, true);
+  const tap = ((e: LangChainStreamEvent) => {
     if (!e || typeof e.event !== 'string' || typeof e.run_id !== 'string') return;
-    const run: LangChainRun = {
-      name: e.name,
-      metadata: e.metadata,
-      tags: e.tags,
-    };
-    // The first event is the start of the runnable streamEvents was called on.
-    if (e.event.endsWith('_start')) m.rootStart(e.run_id);
+    const run: LangChainRun = { name: e.name, metadata: e.metadata, tags: e.tags };
     switch (e.event) {
       case 'on_chat_model_start':
       case 'on_llm_start':
-        m.modelStart(e.run_id, run);
+        m.modelStart(e.run_id, undefined, run);
         break;
       case 'on_chat_model_stream':
       case 'on_llm_stream':
@@ -383,18 +416,42 @@ export function createLangChainTap(sink: EventSink, options: LangChainOptions): 
       case 'on_llm_end':
         m.modelEnd(e.run_id, e.data?.output);
         break;
-      case 'on_chat_model_error':
-      case 'on_llm_error':
-        m.modelError(e.run_id);
-        break;
       case 'on_tool_start':
-        m.toolStart(e.run_id, run);
+        m.toolStart(e.run_id, undefined, run);
         break;
       case 'on_tool_end':
       case 'on_tool_error':
         m.toolEnd(e.run_id, e.event === 'on_tool_error');
         break;
+      default:
+        if (e.event.endsWith('_start')) m.chainStart(e.run_id);
+        else if (e.event.endsWith('_end')) m.chainEnd(e.run_id, false);
     }
-    if (e.event.endsWith('_end') || e.event.endsWith('_error')) m.rootEnd(e.run_id);
-  };
+  }) as LangChainTap;
+  tap.end = (error = false) => m.endAll(error);
+  return tap;
+}
+
+/**
+ * Feed a whole `streamEvents` (v2) stream to the chart. Resolves when it ends;
+ * a stream that throws ends its runs with an error, then the error is
+ * rethrown.
+ *
+ * ```ts
+ * await tapLangChainStream(stream, graph.streamEvents(input, { version: 'v2' }), { agentId: bySubgraph('graph') });
+ * ```
+ */
+export async function tapLangChainStream(
+  sink: EventSink,
+  events: AsyncIterable<LangChainStreamEvent>,
+  options: LangChainOptions
+): Promise<void> {
+  const tap = createLangChainTap(sink, options);
+  try {
+    for await (const e of events) tap(e);
+  } catch (err) {
+    tap.end(true);
+    throw err;
+  }
+  tap.end(false);
 }

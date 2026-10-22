@@ -48,7 +48,9 @@ for (const [file, budget] of Object.entries(BUDGETS)) {
 }
 
 // Adapters: small, and free of the client directive so they run on servers.
-const ADAPTER_BUDGET = 1_500;
+// 1.5 → 2 KB for langchain: per-agent run counting and per-invocation roots
+// (concurrent runs, supervisors and failed streams end correctly).
+const ADAPTER_BUDGET = 2_000;
 for (const file of ['dist/ai-sdk.js', 'dist/ag-ui.js', 'dist/langchain.js']) {
   const out = await build({ entryPoints: [file], bundle: true, minify: true, write: false, format: 'esm', logLevel: 'silent' });
   const gz = gzipSync(out.outputFiles[0].contents).length;

@@ -79,6 +79,6 @@ describe.skipIf(!aiSdk || !agUi || !langchain)('built adapters', () => {
     const lc = langchain!.createLangChainCallbacks(sink, { agentId: 'c' });
     lc.handleToolStart({ id: ['x', 'Search'] }, '', 'r1');
     lc.handleToolEnd(null, 'r1');
-    expect(got).toEqual(['start', 'tool-start', 'tool-end', 'start', 'finish', 'tool-start', 'tool-end']);
+    expect(got).toEqual(['start', 'tool-start', 'tool-end', 'start', 'finish', 'tool-start', 'tool-end', 'finish']);
   });
 });
