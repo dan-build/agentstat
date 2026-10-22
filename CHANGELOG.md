@@ -25,6 +25,11 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
   could drop them). At 50 agents, 15-minute windows and 20 Hz, the slowest
   frame went from ~200 ms to under 15 ms and memory from 170 MB to 50 MB.
 
+- **Lines can no longer overshoot the data.** Curves are drawn as monotone
+  cubics: between two samples the line stays within their range. Previously a
+  peak could be drawn past its true value (progress above 100%), and a fall to
+  zero could dip below the axis.
+
 ### Fixed
 
 - **A paused view no longer changes** as new data arrives in its window.

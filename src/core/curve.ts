@@ -1,7 +1,6 @@
 // src/core/curve.ts — line shaping helpers for the renderer.
 
 import type { TSPoint } from '../timeseries';
-import { clamp } from './constants';
 
 /**
  * Display-only exponential moving average over a point series. Returns a new
@@ -34,29 +33,46 @@ export const niceMax = (raw: number, floor = 10): number => {
 };
 
 /**
- * Build (don't stroke) a Catmull-Rom path through `points`. Shared by the
- * stroked line and the area fill so both follow the identical curve. Control
- * points are clamped to each segment's span to prevent loops.
+ * Build (don't stroke) a smooth path through `points` that never overshoots:
+ * a monotone cubic (Steffen, 1990). Between two samples the curve stays within
+ * their range, so a peak is drawn at its true height, a fall to zero never dips
+ * below it, and time never runs backwards. Shared by the stroked line and the
+ * area fill so both follow the identical curve. Points must be sorted by x;
+ * equal x (simultaneous samples) is drawn as a vertical step.
  */
-export const splinePath = (
-  ctx: CanvasRenderingContext2D,
-  points: { x: number; y: number }[],
-  tension = 0.4
-) => {
-  for (let i = 0; i < points.length - 1; i++) {
-    const p0 = points[Math.max(0, i - 1)];
-    const p1 = points[i];
-    const p2 = points[i + 1];
-    const p3 = points[Math.min(points.length - 1, i + 2)];
-    const c1x = p1.x + ((p2.x - p0.x) * tension) / 3;
-    let c1y = p1.y + ((p2.y - p0.y) * tension) / 3;
-    const c2x = p2.x - ((p3.x - p1.x) * tension) / 3;
-    let c2y = p2.y - ((p3.y - p1.y) * tension) / 3;
-    const loY = Math.min(p1.y, p2.y);
-    const hiY = Math.max(p1.y, p2.y);
-    const slack = (hiY - loY) * 0.5 + 0.01;
-    c1y = clamp(c1y, loY - slack, hiY + slack);
-    c2y = clamp(c2y, loY - slack, hiY + slack);
-    ctx.bezierCurveTo(clamp(c1x, p1.x, p2.x), c1y, clamp(c2x, p1.x, p2.x), c2y, p2.x, p2.y);
+export const splinePath = (ctx: CanvasRenderingContext2D, points: { x: number; y: number }[]) => {
+  const n = points.length;
+  if (n < 2) return;
+  // Segment widths and slopes; a zero-width segment has slope 0.
+  const h = new Array<number>(n - 1);
+  const d = new Array<number>(n - 1);
+  for (let i = 0; i < n - 1; i++) {
+    h[i] = points[i + 1].x - points[i].x;
+    d[i] = h[i] > 0 ? (points[i + 1].y - points[i].y) / h[i] : 0;
+  }
+  // Tangents: one-sided at the ends, Steffen's limited average inside. A
+  // tangent is 0 at local extrema and never more than twice the smaller
+  // neighbouring slope, which keeps every segment monotone.
+  const m = new Array<number>(n);
+  m[0] = d[0];
+  m[n - 1] = d[n - 2];
+  for (let i = 1; i < n - 1; i++) {
+    const hs = h[i - 1] + h[i];
+    if (!(hs > 0) || d[i - 1] * d[i] <= 0) {
+      m[i] = 0;
+      continue;
+    }
+    const p = (d[i - 1] * h[i] + d[i] * h[i - 1]) / hs;
+    m[i] = Math.sign(d[i]) * 2 * Math.min(Math.abs(d[i - 1]), Math.abs(d[i]), 0.5 * Math.abs(p));
+  }
+  for (let i = 0; i < n - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    if (!(h[i] > 0)) {
+      ctx.lineTo(b.x, b.y);
+      continue;
+    }
+    const k = h[i] / 3;
+    ctx.bezierCurveTo(a.x + k, a.y + m[i] * k, b.x - k, b.y - m[i + 1] * k, b.x, b.y);
   }
 };
