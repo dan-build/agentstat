@@ -48,10 +48,11 @@ for (const [file, budget] of Object.entries(BUDGETS)) {
 }
 
 // Adapters: small, and free of the client directive so they run on servers.
-// 1.5 → 2 KB for langchain: per-agent run counting and per-invocation roots
-// (concurrent runs, supervisors and failed streams end correctly).
-const ADAPTER_BUDGET = 2_000;
-for (const file of ['dist/ai-sdk.js', 'dist/ag-ui.js', 'dist/langchain.js']) {
+// langchain 1.5 → 2.2 KB: per-agent run counting, per-invocation roots and
+// handover (concurrent runs, supervisors, parallel agents, failed and stopped
+// runs end correctly — verified live against LangGraph).
+const ADAPTER_BUDGETS = { 'dist/ai-sdk.js': 2_000, 'dist/ag-ui.js': 2_000, 'dist/langchain.js': 2_200 };
+for (const [file, ADAPTER_BUDGET] of Object.entries(ADAPTER_BUDGETS)) {
   const out = await build({ entryPoints: [file], bundle: true, minify: true, write: false, format: 'esm', logLevel: 'silent' });
   const gz = gzipSync(out.outputFiles[0].contents).length;
   report(gz <= ADAPTER_BUDGET, `${file}: ${gz} B bundled min+gzip (budget ${ADAPTER_BUDGET} B)`);

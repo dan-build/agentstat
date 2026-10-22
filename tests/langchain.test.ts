@@ -92,7 +92,45 @@ describe('createLangChainCallbacks', () => {
     cb.handleChatModelStart(llm, [], 'm1', 'root');
     cb.handleLLMEnd({}, 'm1');
     cb.handleChainError(new Error('GraphRecursionError'), 'root');
-    expect(s.seq()).toEqual(['a:start', 'a:finish', 'a:error', 'a:finish']);
+    expect(s.seq()).toEqual(['a:start', 'a:finish', 'a:error', 'a:finish']); // finished, then failed with the run
+  });
+
+  it('counts a model failure once, though it also fails the invocation', () => {
+    const s = sink();
+    const cb = createLangChainCallbacks(s, { agentId: 'a' });
+    cb.handleChainStart({}, {}, 'root', undefined);
+    cb.handleChatModelStart(llm, [], 'm1', 'root');
+    cb.handleLLMError(new Error('500'), 'm1');
+    cb.handleChainError(new Error('500'), 'root');
+    expect(s.seq()).toEqual(['a:start', 'a:error', 'a:finish']);
+  });
+
+  it('does not count an invocation stopped during a tool as an error', () => {
+    const s = sink();
+    const cb = createLangChainCallbacks(s, { agentId: 'a' });
+    const abort = Object.assign(new Error('stop'), { name: 'AbortError' });
+    cb.handleChainStart({}, {}, 'root', undefined);
+    cb.handleToolStart({ name: 'slow' }, '', 't1', 'root');
+    cb.handleToolError(abort, 't1');
+    cb.handleChainError(abort, 'root');
+    expect(s.got.map(([, e]) => e)).toEqual([
+      { type: 'tool-start', name: 'slow' },
+      { type: 'tool-end', name: 'slow', error: false },
+      { type: 'finish' },
+    ]);
+  });
+
+  it('agents working in parallel do not finish each other', () => {
+    const s = sink();
+    const cb = createLangChainCallbacks(s, { agentId: (r) => r.name });
+    cb.handleChainStart({}, {}, 'root', undefined);
+    cb.handleChatModelStart(llm, [], 'a1', 'root', {}, [], {}, 'alice');
+    cb.handleChatModelStart(llm, [], 'b1', 'root', {}, [], {}, 'bob');
+    cb.handleLLMEnd(withCalls, 'b1'); // bob hands over to its tool…
+    cb.handleLLMEnd(withCalls, 'a1');
+    cb.handleToolStart({}, '', 'at', 'root', [], {}, 'alice'); // …alice is mid-turn
+    cb.handleToolStart({}, '', 'bt', 'root', [], {}, 'bob');
+    expect(s.seq()).toEqual(['alice:start', 'bob:start', 'alice:tool-start:alice', 'bob:tool-start:bob']);
   });
 
   it('does not count a stopped (aborted) model call as an error', () => {

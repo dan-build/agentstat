@@ -132,11 +132,15 @@ function createMapper(
   const byRoot = new Map<string, Set<string>>();
   // Agents with nothing open that haven't finished: root they belong to.
   const handover = new Map<string, string>();
+  // Agents that reported an error since their last start.
+  const failed = new Set<string>();
   let current: string | undefined;
 
   const emit = (id: string, e: AgentEvent) => {
     if (e.type === 'finish') busy.delete(id);
     else busy.add(id);
+    if (e.type === 'error') failed.add(id);
+    if (e.type === 'start') failed.delete(id);
     if (!report) return sink.push(id, e);
     try {
       sink.push(id, e);
@@ -157,14 +161,17 @@ function createMapper(
       const id = typeof pick === 'function' ? pick(run) : pick;
       if (typeof id === 'string' && id) agent = id;
     }
+    // Starting a new turn (not already working): see handover below.
+    const fresh = !!agent && !busy.has(agent);
     const r: Run = { kind, root, agent, name: run.name ?? '', streamed: false };
     runs.set(runId, r);
-    // Work starting elsewhere in the invocation: agents that handed over and
-    // didn't continue are done. The agent's own next run continues it.
+    // Another agent starting a new turn in the invocation: agents that
+    // handed over and didn't continue are done (agents working in parallel
+    // aren't). The agent's own next run continues it.
     if (kind !== 'chain') {
       for (const [other, otherRoot] of Array.from(handover)) {
         if (other === agent) handover.delete(other);
-        else if (otherRoot === root) {
+        else if (fresh && otherRoot === root) {
           handover.delete(other);
           if (!open.has(other)) emit(other, { type: 'finish' });
         }
@@ -197,11 +204,11 @@ function createMapper(
     for (const [id, r] of Array.from(runs)) if (r.root === rootId) close(id, r);
     for (const agent of byRoot.get(rootId) ?? []) {
       if (open.has(agent)) continue;
-      const wasBusy = busy.has(agent);
       // A failed invocation (recursion limit, a node's exception) counts
-      // against every agent it used, even ones that had already finished.
-      if (error) emit(agent, { type: 'error' });
-      if (wasBusy || error) emit(agent, { type: 'finish' });
+      // against every agent it used, even ones that had already finished —
+      // once: not again for an agent whose own run reported it.
+      if (error && !failed.has(agent)) emit(agent, { type: 'error' });
+      if (busy.has(agent)) emit(agent, { type: 'finish' });
       handover.delete(agent);
     }
     byRoot.delete(rootId);
@@ -382,8 +389,8 @@ export function createLangChainCallbacks(sink: EventSink, options: LangChainOpti
     handleChainEnd(_outputs, runId) {
       m.chainEnd(runId, false);
     },
-    handleChainError(_err, runId) {
-      m.chainEnd(runId, true);
+    handleChainError(err, runId) {
+      m.chainEnd(runId, !aborted(err));
     },
     handleChatModelStart(llm, _messages, runId, parentRunId, _extra, tags, metadata, runName) {
       m.modelStart(runId, parentRunId, run(llm, metadata, tags, runName));
@@ -406,8 +413,8 @@ export function createLangChainCallbacks(sink: EventSink, options: LangChainOpti
     handleToolEnd(_output, runId) {
       m.toolEnd(runId, false);
     },
-    handleToolError(_err, runId) {
-      m.toolEnd(runId, true);
+    handleToolError(err, runId) {
+      m.toolEnd(runId, !aborted(err));
     },
   };
 }
