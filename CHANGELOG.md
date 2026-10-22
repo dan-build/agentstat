@@ -27,6 +27,10 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
     chunks.
   - **`@dan-build/agentstat/ag-ui`**: `createAgUiTap` for AG-UI protocol
     events.
+  - **`@dan-build/agentstat/langchain`** (LangChain.js / LangGraph.js):
+    `createLangChainCallbacks` (a callback handler) and `createLangChainTap`
+    (`streamEvents` v2), with per-run agent routing — `bySubgraph()` gives
+    each sub-agent of a LangGraph supervisor or swarm its own line.
 
 ## [0.5.0] — 2026-10-22
 

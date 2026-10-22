@@ -165,6 +165,28 @@ estimated from characters (~4 per token); pass `{ countTokens }` for exact
 ones. Full example:
 [`examples/vercel-ai-sdk.tsx`](./examples/vercel-ai-sdk.tsx).
 
+### LangChain and LangGraph
+
+`@dan-build/agentstat/langchain` (LangChain.js / LangGraph.js; no dependency on
+`@langchain/*`) works from callbacks or from `streamEvents`:
+
+```ts
+import { bySubgraph, createLangChainCallbacks, createLangChainTap } from '@dan-build/agentstat/langchain';
+
+// Callbacks: pass to any invocation.
+await agent.invoke(input, { callbacks: [createLangChainCallbacks(stream, { agentId: 'researcher' })] });
+
+// LangGraph multi-agent: one chart agent per sub-agent (supervisor, swarm).
+const tap = createLangChainTap(stream, { agentId: bySubgraph('supervisor') });
+for await (const e of graph.streamEvents(input, { version: 'v2' })) tap(e);
+```
+
+A model call shows as start → output → complete (streamed tokens, or its
+reported output tokens if it didn't stream), a tool call as `waiting`, and the
+end of the outermost run finishes every agent it used. `agentId` can be a
+function of the run (`{ name, metadata, tags }`); `bySubgraph(fallback)`
+routes runs inside a LangGraph subgraph to the subgraph's node name.
+
 ### AG-UI
 
 `@dan-build/agentstat/ag-ui` maps AG-UI protocol events (no dependency on

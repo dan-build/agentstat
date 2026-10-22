@@ -39,6 +39,16 @@
         "default": "./dist/ag-ui.cjs"
       }
     },
+    "./langchain": {
+      "import": {
+        "types": "./dist/langchain.d.ts",
+        "default": "./dist/langchain.js"
+      },
+      "require": {
+        "types": "./dist/langchain.d.cts",
+        "default": "./dist/langchain.cjs"
+      }
+    },
     "./package.json": "./package.json"
   },
   "typesVersions": {
@@ -48,6 +58,9 @@
       ],
       "ag-ui": [
         "./dist/ag-ui.d.ts"
+      ],
+      "langchain": [
+        "./dist/langchain.d.ts"
       ]
     }
   },
