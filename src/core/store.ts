@@ -117,6 +117,13 @@ export class AgentStore {
   // `resolved` events for episodes ended outside a tick (agent removed),
   // delivered at the start of the next tick.
   private _pendingEvents: StoreEvent[] = [];
+  // Per-agent slow reference of the normal active rate (detector context).
+  private _refRate = new Map<string, number>();
+  // Agents whose caller has reported a status at least once.
+  private _statusReported = new Set<string>();
+  // History the detectors need for the current config.
+  private _detectorHistoryMs = DETECTOR_HISTORY_MS;
+  private _lastTick = 0;
   private _listeners = new Set<() => void>();
 
   constructor(agents: Agent[], options: StoreOptions, now: number) {
@@ -189,6 +196,8 @@ export class AgentStore {
     this._health.delete(id);
     this.anomalies.delete(id);
     this._locked.delete(id);
+    this._refRate.delete(id);
+    this._statusReported.delete(id);
     this._sim.delete(id);
   }
 
@@ -214,7 +223,7 @@ export class AgentStore {
   retentionMs(): number {
     const winS = this.options.windowSeconds;
     const view = (winS !== undefined && winS > 0 ? winS * 1000 : DEFAULT_VIEW_MS) * 1.5;
-    return Math.max(view, DETECTOR_HISTORY_MS);
+    return Math.max(view, this._detectorHistoryMs);
   }
 
   private _pushSample(rec: AgentRecord, now: number): void {
@@ -262,6 +271,7 @@ export class AgentStore {
       status = undefined;
     }
 
+    if (status !== undefined) this._statusReported.add(id);
     if (status === 'stuck' || status === 'hallucinating') this._locked.add(id);
     else if (status !== undefined) this._locked.delete(id);
 
@@ -300,6 +310,7 @@ export class AgentStore {
       rec.current.progress = step.progress;
       rec.current.confidenceScore = step.confidenceScore;
       this._simTouched.add(rec.id);
+      this._statusReported.add(rec.id);
       if (step.status !== rec.current.status) {
         rec.current.status = step.status;
         this.status.get(rec.id)?.record(now, step.status);
@@ -328,6 +339,15 @@ export class AgentStore {
    */
   healthTick(now: number, detectOn: boolean, cfg: AnomalyConfig, emit: (e: StoreEvent) => void): void {
     for (const ev of this._pendingEvents.splice(0)) emit(ev);
+    // Keep enough history for the slowest detector rule in this config.
+    this._detectorHistoryMs = Math.max(
+      DETECTOR_HISTORY_MS,
+      2 * cfg.thinkingStallMs + 15_000,
+      2 * cfg.stallDurationMs + 15_000,
+      cfg.spikeBaselineMs + 10_000
+    );
+    const dt = this._lastTick ? Math.max(0, now - this._lastTick) : 0;
+    this._lastTick = now;
     for (const rec of this.list) {
       const tBuf = this.tokens.get(rec.id);
       let found: Anomaly[] = [];
@@ -339,7 +359,25 @@ export class AgentStore {
         // Open episodes are passed in so detectors keep the baseline they
         // opened against and apply hysteresis.
         const open = new Map([...eps].map(([k, ep]) => [k, { since: ep.since, baseline: ep.baseline }]));
-        found = detectAnomalies(tokens, changes, rec.current.status, now, cfg, open);
+        // Slow reference of the agent's active rate (time constant ~5 min),
+        // updated from this tick's active output.
+        let sum = 0;
+        let n = 0;
+        for (const s of tBuf.since(now - (dt || 500))) {
+          if (s.v > cfg.stallRateThreshold) {
+            sum += s.v;
+            n++;
+          }
+        }
+        if (n) {
+          const prev = this._refRate.get(rec.id);
+          const a = prev === undefined ? 1 : 1 - Math.exp(-(dt || 500) / 300_000);
+          this._refRate.set(rec.id, prev === undefined ? sum / n : prev + (sum / n - prev) * a);
+        }
+        found = detectAnomalies(tokens, changes, rec.current.status, now, cfg, open, {
+          referenceRate: this._refRate.get(rec.id),
+          statusReported: this._statusReported.has(rec.id),
+        });
         const prev = this.anomalies.get(rec.id) ?? [];
         if (found.length || prev.length) this.dirty = true;
         this.anomalies.set(rec.id, found);

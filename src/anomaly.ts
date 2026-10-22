@@ -39,6 +39,21 @@ export interface Anomaly {
   baseline?: number;
 }
 
+/** What the detectors know about an agent beyond its recent samples. */
+export interface AgentContext {
+  /**
+   * A slow-moving reference for the agent's normal active rate (minutes
+   * long), so a gradual decay can't drag the idle level down with it.
+   */
+  referenceRate?: number;
+  /**
+   * Whether the caller has ever reported a status. When only rates are sent,
+   * `active` means "unknown": a quiet stretch may just be a user who stopped
+   * typing, so only a stream that goes completely silent counts as a stall.
+   */
+  statusReported?: boolean;
+}
+
 /** What detectors with memory need to know about an episode in progress. */
 export interface OpenEpisode {
   /** When the episode opened (same clock as samples). */
@@ -99,7 +114,7 @@ export const DEFAULT_ANOMALY_CONFIG: AnomalyConfig = {
   spikeMinSamples: 10,
   spikeBaselineMs: 30_000,
   spikeMinBaselineRate: 1,
-  spikeMaxEpisodeMs: 120_000,
+  spikeMaxEpisodeMs: 600_000,
   thrashChangeCount: 4,
   thrashWindowMs: 4_000,
   thrashBenignStatuses: ['active', 'thinking', 'complete'],
@@ -172,12 +187,19 @@ function typicalGap(tokens: TokenSample[]): number {
 }
 
 /**
- * Rates at or below this count as idle: the absolute `stallRateThreshold`, or
- * 5% of the agent's recent high, whichever is larger — so a trickle from a
- * normally fast agent is idle, not "low but active".
+ * Rates at or below this count as idle: 5% of the agent's normal high (its
+ * recent 95th percentile, or the slow reference if higher), so a trickle from a
+ * normally fast agent is idle; and never less than `stallRateThreshold` —
+ * unless the agent's own typical output is that low, in which case half of it.
  */
-function activeCutoff(tokens: TokenSample[], cfg: AnomalyConfig): number {
-  return Math.max(cfg.stallRateThreshold, IDLE_SHARE * quantile(tokens.map((s) => s.v), 0.95));
+function activeCutoff(tokens: TokenSample[], cfg: AnomalyConfig, ctx?: AgentContext): number {
+  const values = tokens.map((s) => s.v);
+  const positive = values.filter((v) => v > 0);
+  const floor = positive.length
+    ? Math.min(cfg.stallRateThreshold, 0.5 * quantile(positive, 0.5))
+    : cfg.stallRateThreshold;
+  const high = Math.max(quantile(values, 0.95), ctx?.referenceRate ?? 0);
+  return Math.max(floor, IDLE_SHARE * high);
 }
 
 /**
@@ -195,7 +217,8 @@ export function detectStall(
   tokens: TokenSample[],
   currentStatus: AgentStatus,
   now: number,
-  cfg: AnomalyConfig
+  cfg: AnomalyConfig,
+  ctx?: AgentContext
 ): Anomaly | null {
   const limit =
     currentStatus === 'active'
@@ -218,7 +241,9 @@ export function detectStall(
     };
   }
 
-  const idleLevel = activeCutoff(tokens, cfg);
+  // Rate-only integrations: quiet output alone isn't evidence of a stall.
+  if (ctx?.statusReported === false) return null;
+  const idleLevel = activeCutoff(tokens, cfg, ctx);
 
   // Walk back from now while the running average stays idle; the stall began
   // at the earliest such sample.
@@ -269,14 +294,15 @@ export function detectSpike(
   tokens: TokenSample[],
   cfg: AnomalyConfig,
   now: number = tokens.length ? tokens[tokens.length - 1].t : 0,
-  episode?: OpenEpisode
+  episode?: OpenEpisode,
+  ctx?: AgentContext
 ): Anomaly | null {
   if (tokens.length === 0) return null;
   if (episode && now - episode.since >= cfg.spikeMaxEpisodeMs) return null;
 
   // Sparse telemetry: the recent window always spans a few samples.
   const recentMs = Math.max(RECENT_MS, 2.5 * typicalGap(tokens));
-  const idleCutoff = activeCutoff(tokens, cfg);
+  const idleCutoff = activeCutoff(tokens, cfg, ctx);
   let peakNorm: number;
   if (episode?.baseline !== undefined) {
     // An open episode keeps the baseline it opened against, so a sustained
@@ -336,7 +362,7 @@ export function detectSpike(
   const burst = top.v >= BURST_RATIO * peakNorm && top.v - peakNorm >= cfg.spikeMinIncrease;
   if (sustained || burst) {
     // A lone sample far above the rest is a burst; a raised level is a runaway.
-    const isBurst = burst && (!sustained || top.v > 2 * recentMean);
+    const isBurst = (burst && (!sustained || top.v > 2 * recentMean)) || recentN === 1;
     const v = isBurst ? top.v : recentMean;
     const ratio = v / peakNorm;
     return {
@@ -430,7 +456,7 @@ export function detectThrash(
  * Run all detectors and return whatever fired. At most one of each kind, in a
  * stable order (stall, spike, thrash). `open` describes episodes currently
  * being reported, so detectors with memory (spike) keep their baseline and
- * apply hysteresis.
+ * apply hysteresis; `ctx` adds what the caller knows about the agent.
  */
 export function detectAnomalies(
   tokens: TokenSample[],
@@ -438,13 +464,18 @@ export function detectAnomalies(
   currentStatus: AgentStatus,
   now: number,
   cfg: AnomalyConfig = DEFAULT_ANOMALY_CONFIG,
-  open?: ReadonlyMap<AnomalyKind, OpenEpisode>
+  open?: ReadonlyMap<AnomalyKind, OpenEpisode>,
+  ctx?: AgentContext
 ): Anomaly[] {
   const out: Anomaly[] = [];
-  const stall = detectStall(tokens, currentStatus, now, cfg);
+  const stall = detectStall(tokens, currentStatus, now, cfg, ctx);
   if (stall) out.push(stall);
-  const spike = detectSpike(tokens, cfg, now, open?.get('spike'));
-  if (spike) out.push(spike);
+  // Output returning after a stall is recovery, not a runaway: no spikes
+  // while a stall is being reported.
+  if (!stall && !open?.has('stall')) {
+    const spike = detectSpike(tokens, cfg, now, open?.get('spike'), ctx);
+    if (spike) out.push(spike);
+  }
   const thrash = detectThrash(changes, now, cfg);
   if (thrash) out.push(thrash);
   return out;

@@ -253,3 +253,32 @@ describe('detectors know what normal looks like', () => {
     expect(detectThrash(flapping, 9000, cfg)?.message).toMatch(/active↔stuck/);
   });
 });
+
+describe('detector context', () => {
+  it('does not call a naturally slow agent stalled', () => {
+    // 0.3 t/s structured-output agent, sampled at 1 Hz.
+    const tokens = series(new Array(60).fill(0.3), 60_000, 1000);
+    expect(detectStall(tokens, 'active', 60_000, cfg)).toBeNull();
+  });
+
+  it('keeps the idle level up while an agent decays slowly', () => {
+    // 36 → 1 t/s over two minutes, then flat at 1 t/s.
+    const vals = Array.from({ length: 1500 }, (_, i) => Math.max(1, 36 - (35 * i) / 1200));
+    const tokens = series(vals, 150_000, 100).filter((s) => s.t > 75_000);
+    expect(detectStall(tokens, 'active', 150_000, cfg)).toBeNull();
+    expect(detectStall(tokens, 'active', 150_000, cfg, { referenceRate: 30 })?.kind).toBe('stall');
+  });
+
+  it('only flags silence, not quiet output, when the caller never reports a status', () => {
+    const quiet = series(new Array(200).fill(0), 20_000, 100);
+    expect(detectStall(quiet, 'active', 20_000, cfg, { statusReported: false })).toBeNull();
+    expect(detectStall(quiet, 'active', 40_000, cfg, { statusReported: false })?.message).toMatch(/no data/);
+  });
+
+  it('does not call output returning after a stall a spike', () => {
+    const vals = [...new Array(300).fill(30), ...new Array(200).fill(1), ...new Array(10).fill(30)];
+    const tokens = series(vals, 51_000, 100);
+    const open = new Map([['stall' as const, { since: 40_000 }]]);
+    expect(detectAnomalies(tokens, [], 'active', 51_000, cfg, open).some((a) => a.kind === 'spike')).toBe(false);
+  });
+});

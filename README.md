@@ -120,23 +120,34 @@ wall-clock window; long windows are downsampled to the canvas resolution.
 
 | Kind | Meaning | How it's detected |
 |------|---------|-------------------|
-| **stall** | Claims to be working (`active` / `thinking`) but isn't producing — a hung tool call, a dropped stream. | Token rate near zero for `stallDurationMs`, **or** no data at all for that long. |
-| **spike** | A runaway loop burning tokens far above normal. | Outlier (z-score) against the agent's own baseline. |
-| **thrash** | Flipping between states. | `thrashChangeCount` status changes within `thrashWindowMs`. |
+| **stall** | Claims to be working but isn't producing — a hung call, a dropped stream. | Output below 5% of the agent's normal rate for 10 s while `active` (30 s while `thinking`, since reasoning is quiet), or no data at all for that long. |
+| **spike** | A runaway: burning tokens far above normal. | Compared with the agent's own usual peak: a sustained jump (last second ≥ 1.5×), a lone burst (≥ 4×), or a climb that keeps rising over 30 s. Bursty output and resuming after a pause don't count. |
+| **thrash** | Flapping between states. | 4 status changes within 4 s that involve a problem state (moving between `active`, `thinking` and `complete` is normal). |
 
-Each anomaly carries the numbers that triggered it (`stalled 8s while active`,
-`token spike 80/s (3.2σ above ~10/s)`).
+Each anomaly carries the numbers that triggered it (`stalled 12s while active`,
+`runaway output 100/s (4.4× the usual peak of ~23/s)`).
 
 - **Markers:** warning = ▲ amber, critical = ◆ red. Each marker shows the agent's
   name.
-- **Screen readers:** new anomalies are announced through a live region.
-- **`onAnomaly`:** fires once when an anomaly starts, and once more if it
-  escalates to critical — not on every check.
-- **Thresholds:** tune them with `anomalyConfig`. They're sensible defaults, not
-  calibrated on real agent traces.
+- **Screen readers:** new and resolved anomalies are announced through live
+  regions.
+- **Callbacks:** `onAnomaly` fires once when an anomaly starts (and once more if
+  it escalates to critical); `onAnomalyEnd` fires once when it ends.
+- **Measured, not guessed:** `npm run eval:detectors` replays labelled
+  scenarios through the real store, including an adversarial set and a holdout
+  set written by independent reviewers.
+
+**Limitations.** The detectors only see token rate and status:
+
+- **A long tool call reported as `active`** looks like a stall after 10 s.
+  Raise `stallDurationMs`, or report `thinking` while a tool runs.
+- **Rates computed per small chunk** (alternating 0 and high values) can hide
+  runaways; send a rate averaged over about a second.
+- **If you never send a status**, only a stream that goes completely silent
+  counts as a stall.
 
 ```tsx
-<AgentStat agents={agents} anomalyDetection anomalyConfig={{ stallDurationMs: 3000, spikeZScore: 4 }} />
+<AgentStat agents={agents} anomalyDetection anomalyConfig={{ stallDurationMs: 20_000, spikeRatio: 2 }} />
 ```
 
 The detector also works without the chart:
@@ -178,6 +189,7 @@ const found = detectAnomalies(tokenSamples, statusChanges, 'active', performance
 | `anomalyDetection` | `boolean` | `false` | |
 | `anomalyConfig` | `Partial<AnomalyConfig>` | — | Merged over `DEFAULT_ANOMALY_CONFIG`. |
 | `onAnomaly` | `(id, anomaly) => void` | — | Once per anomaly, plus escalation. |
+| `onAnomalyEnd` | `(id, anomaly) => void` | — | Once when an anomaly ends. |
 | `onHealthChange` | `(id, health) => void` | — | When the score or a signal changes. |
 | `onPointClick` | `(id, point) => void` | — | Click or Enter on a sample. |
 | `simulateData` | `boolean \| { seed?: number }` | `false` | Demo data. |

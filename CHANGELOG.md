@@ -31,11 +31,20 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
   zero could dip below the axis.
 
 - **Anomaly detection rebuilt to stop crying wolf**, and measured. A labelled
-  evaluation (`npm run eval:detectors`) replays 30 scenarios through the real
-  store: 14 written with the change, and 16 written by an independent reviewer
-  to find blind spots. Combined, precision went from 28% to 100%, recall from
-  73% to 100%, and false alarms from 43.6 to 0 per agent-hour, with no alert
-  closing while its problem was still going on.
+  evaluation (`npm run eval:detectors`) replays 48 scenarios through the real
+  store in three sets: written with the change, an adversarial set written by
+  a reviewer to find blind spots, and a holdout set written by another
+  reviewer who hadn't seen the tuning. Against 0.4:
+
+  | Set | Precision | Recall | False alarms / agent-hour |
+  |---|---|---|---|
+  | Original | 38.7% → 100% | 85.7% → 100% | 36.6 → 0 |
+  | Adversarial | 23.1% → 100% | 66.7% → 100% | 47.0 → 0 |
+  | Holdout | 7.3% → 56.4% | 73.3% → 86.7% | 63.4 → 4.0 |
+
+  The remaining holdout errors are long tool calls and orchestrator waits
+  reported as `active`/`thinking` (see the README's limitations), which need a
+  richer status than the detectors receive today.
   - **Stall:** "no output" is judged relative to the agent (an average below
     5% of its recent high), so a trickle or heartbeat can't hide a stall. The
     limit while `active` is now 10 s (tool calls often pause output for
@@ -45,7 +54,7 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
     pause and start-up ramps don't alert. Catches sustained runaways (the last
     second's average), isolated bursts (one sample ≥ 4×) and slow climbs (rate
     still rising over 30 s). An open spike keeps the baseline it opened
-    against, so a long runaway can't become its own normal; after 2 minutes
+    against, so a long runaway can't become its own normal; after 10 minutes
     (`spikeMaxEpisodeMs`) the new level is accepted. Works with sparse or
     batched telemetry. **Breaking:** `spikeZScore` is replaced by `spikeRatio`
     (1.5) and `spikeMinIncrease` (3 t/s).
@@ -58,8 +67,13 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
     screen-reader announcement — also when detection is switched off or the
     agent is removed. Spike anomalies carry the `baseline` they were compared
     with.
+  - **Context:** a slow per-agent reference rate keeps a gradual decay from
+    hiding a stall; naturally slow agents (under 0.5 t/s) aren't "stalled";
+    output returning after a stall isn't a spike; when the caller never sends
+    a status, only total silence counts as a stall.
   - **Detector history** no longer depends on the visible window: the store
-    keeps at least 40 s of samples.
+    keeps what the slowest rule needs (75 s by default), so stall durations
+    are reported in full and thinking stalls can escalate.
 
 ### Fixed
 
