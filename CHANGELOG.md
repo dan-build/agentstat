@@ -2,7 +2,7 @@
 
 All notable changes to AgentStat are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [SemVer](https://semver.org/).
 
-## [0.5.0] — Unreleased
+## [0.5.0] — 2026-10-22
 
 ### Added
 
