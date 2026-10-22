@@ -143,6 +143,16 @@ describe('renderer snapshots', () => {
     expect(frame).toMatchSnapshot();
   });
 
+  it('both metrics with an agent that never reports progress (token line only)', async () => {
+    const frame = await scene({ metric: 'both' }, (ref, i) => {
+      ref.updateAgent('a', { tokensRate: 12 + 6 * Math.sin(i / 5), progress: i, status: 'active' });
+      ref.push('c', { type: 'tokens', count: 3 }); // event-driven: never reports progress
+    });
+    // a: progress line + dashed token line; c: dashed token line only.
+    expect((frame as string[]).filter((c) => c.startsWith('setLineDash(3,3)')).length).toBe(2);
+    expect(frame).toMatchSnapshot();
+  });
+
   it('empty roster', async () => {
     const frame = await scene({ agents: [] });
     expect(frame).toMatchSnapshot();

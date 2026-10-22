@@ -24,6 +24,8 @@ export type View = {
   windowed: boolean;
   drawTarget: number;
   recomputeMs: number;
+  /** The metric drawn ('auto' resolved). */
+  metric: Exclude<ChartMetric, 'auto'>;
   primaryIsTokens: boolean;
   safeTokenMax: number;
   xOf: (t: number) => number;
@@ -49,8 +51,16 @@ export function computeView(
   const h = Math.max(1, cssH - PAD.top - PAD.bottom);
   const viewNow = store.pausedAt ?? now;
   const winMs = opts.windowSeconds !== undefined && opts.windowSeconds > 0 ? opts.windowSeconds * 1000 : undefined;
-  const primaryIsTokens = opts.metric === 'tokens';
-  const primaryMap = primaryIsTokens ? store.tokens : store.progress;
+  // 'auto': progress once every visible agent reports it, else token rate
+  // (which every agent has), so no agent is left without a line.
+  const shown = store.list.filter((r) => r.visible);
+  const metric: Exclude<ChartMetric, 'auto'> =
+    opts.metric !== 'auto'
+      ? opts.metric
+      : shown.length > 0 && shown.every((r) => store.progressKnown.has(r.id))
+        ? 'progress'
+        : 'tokens';
+  const primaryIsTokens = metric === 'tokens';
 
   let tEnd: number;
   let span: number;
@@ -64,7 +74,9 @@ export function computeView(
     let oldest = Infinity;
     for (const rec of store.list) {
       if (!rec.visible) continue;
-      const buf = primaryMap.get(rec.id);
+      // Token samples: every agent has them (progress only once reported),
+      // and they're as recent as its progress.
+      const buf = store.tokens.get(rec.id);
       if (!buf || buf.length === 0) continue;
       newest = Math.max(newest, Math.min(buf.lastT, viewNow));
       oldest = Math.min(oldest, buf.firstT);
@@ -85,7 +97,7 @@ export function computeView(
 
   // Token axis: sticky ceiling, recomputed at most 4×/s.
   let safeTokenMax = 100;
-  if (opts.metric !== 'progress') {
+  if (metric !== 'progress') {
     let tokenMax = opts.tokenAxisMax;
     if (tokenMax === undefined || !(tokenMax > 0)) {
       const cache = store.axis;
@@ -130,6 +142,7 @@ export function computeView(
     windowed: winMs !== undefined,
     drawTarget,
     recomputeMs,
+    metric,
     primaryIsTokens,
     safeTokenMax,
     xOf: (t: number) => PAD.left + clamp((t - tStart) / span, 0, 1) * w,
@@ -147,7 +160,11 @@ export function pointsFor(buf: TimeSeriesBuffer, view: View): TSPoint[] {
   return end === pts.length ? pts : pts.slice(0, end);
 }
 
-/** The buffer for the metric on the primary (left) axis. */
+/**
+ * The buffer for the metric on the primary (left) axis; none for progress an
+ * agent never reported (unknown is not 0%).
+ */
 export function primaryBuffer(store: AgentStore, id: string, view: View): TimeSeriesBuffer | undefined {
+  if (!view.primaryIsTokens && !store.progressKnown.has(id)) return undefined;
   return (view.primaryIsTokens ? store.tokens : store.progress).get(id);
 }

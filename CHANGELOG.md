@@ -4,6 +4,25 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Changed
+
+- **Progress is unknown until an agent reports it**, and the default
+  `metric` is now **`'auto'`**: progress once every visible agent reports
+  it, token rate otherwise. What you'll notice:
+  - Agents that never send progress (token-rate or event integrations)
+    plot their token rate instead of a flat 0% line — including with the
+    default props and `createAgent`, whose 0 doesn't count as reported (a
+    starting value above 0 in the `agents` prop does).
+  - A line's progress starts at the first report; nothing is drawn as 0%
+    before it.
+  - With an explicit `"progress"` or `"both"`, an agent that hasn't
+    reported progress has no progress line (its token line and anomaly
+    markers still show), reads "–" when inspected, and is skipped by
+    keyboard inspection; if none has reported it, the chart says so.
+  - `getLiveMetrics` adds `progressKnown`.
+  - Types: `ChartMetric` gains `'auto'` (exhaustive `switch`es over it need
+    a case).
+
 ### Added
 
 - **`createAgentStream()` / `useAgentStream()` and `<AgentStat source>`.**

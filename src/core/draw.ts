@@ -22,6 +22,8 @@ export type HoverTarget = {
   t: number;
   /** Drawn (possibly smoothed) primary value, for placing the marker. */
   drawV: number;
+  /** The metric it was taken on ('auto' can switch: then it's gone). */
+  metric: string;
 };
 
 export type GradientCache = { key: string; map: Map<string, CanvasGradient> };
@@ -70,7 +72,7 @@ export function drawFrame(
   const view = computeView(store, L, now, cssW, cssH);
   const { w, h, xOf, primaryToY, tokenToY, progressToY, safeTokenMax } = view;
   if (w < 16 || h < 16) return null;
-  const metric = L.metric;
+  const metric = view.metric;
   const showProgress = metric !== 'tokens';
   const colorOf = (rec: (typeof store.list)[number], index: number) => colors.resolve(rec, index, mode, tk);
 
@@ -155,65 +157,69 @@ export function drawFrame(
   let drewAny = false;
   store.list.forEach((rec, idx) => {
     if (!rec.visible) return;
+    // No primary line: progress the agent hasn't reported (its token line
+    // under 'both' and its anomaly markers still draw).
     const buf = primaryBuffer(store, rec.id, view);
-    if (!buf || buf.length === 0) return;
-    const raw = pointsFor(buf, view);
-    if (raw.length === 0) return;
+    const raw = buf && buf.length > 0 ? pointsFor(buf, view) : [];
     const col = colorOf(rec, idx);
-    const pts = emaPoints(raw, L.smoothing);
     const lv = store.live.get(rec.id);
-    const livePrimary = lv ? (view.primaryIsTokens ? lv.tokensRate : lv.progress) : pts[pts.length - 1].v;
-    const sp = pts.map((p) => ({ x: xOf(p.t), y: primaryToY(p.v) }));
-    // The tip is the eased live value at the right edge — but only while the
-    // agent is actually reporting. A quiet agent's line ends at its data.
-    const lastT = raw[raw.length - 1].t;
-    const live = view.tEnd - lastT <= STALE_MS;
-    if (live) {
-      const tip = { x: PAD.left + w, y: primaryToY(livePrimary) };
-      if (PAD.left + w - sp[sp.length - 1].x < 1.5) sp[sp.length - 1] = tip;
-      else sp.push(tip);
-    }
-    const tip = sp[sp.length - 1];
-    drewAny = true;
-
-    if (sp.length >= 2) {
-      // One set of tangents for both the fill and the stroke.
-      const tangents = splineTangents(sp);
-      const fillKey = `f:${col.css}`;
-      let fill = gcache.map.get(fillKey);
-      if (!fill) {
-        fill = ctx.createLinearGradient(0, PAD.top, 0, PAD.top + h);
-        // Fills stack where lines overlap, so they thin out as agents are added.
-        fill.addColorStop(0, withAlpha(col.rgba, 0.12 / Math.sqrt(Math.max(1, visibleCount))));
-        fill.addColorStop(1, withAlpha(col.rgba, 0));
-        gcache.map.set(fillKey, fill);
+    let tip: { x: number; y: number } | null = null;
+    let live = false;
+    if (raw.length > 0) {
+      const pts = emaPoints(raw, L.smoothing);
+      const livePrimary = lv ? (view.primaryIsTokens ? lv.tokensRate : lv.progress) : pts[pts.length - 1].v;
+      const sp = pts.map((p) => ({ x: xOf(p.t), y: primaryToY(p.v) }));
+      // The tip is the eased live value at the right edge — but only while the
+      // agent is actually reporting. A quiet agent's line ends at its data.
+      const lastT = raw[raw.length - 1].t;
+      live = view.tEnd - lastT <= STALE_MS;
+      if (live) {
+        const t = { x: PAD.left + w, y: primaryToY(livePrimary) };
+        if (PAD.left + w - sp[sp.length - 1].x < 1.5) sp[sp.length - 1] = t;
+        else sp.push(t);
       }
-      ctx.fillStyle = fill;
-      ctx.beginPath();
-      ctx.moveTo(sp[0].x, sp[0].y);
-      splinePath(ctx, sp, tangents);
-      ctx.lineTo(tip.x, PAD.top + h);
-      ctx.lineTo(sp[0].x, PAD.top + h);
-      ctx.closePath();
-      ctx.fill();
+      tip = sp[sp.length - 1];
+      drewAny = true;
 
-      const lineKey = `l:${col.css}`;
-      let line = gcache.map.get(lineKey);
-      if (!line) {
-        line = ctx.createLinearGradient(PAD.left, 0, PAD.left + w, 0);
-        line.addColorStop(0, withAlpha(col.rgba, 0.15));
-        line.addColorStop(0.22, withAlpha(col.rgba, 0.75));
-        line.addColorStop(1, withAlpha(col.rgba, 1));
-        gcache.map.set(lineKey, line);
+      if (sp.length >= 2) {
+        // One set of tangents for both the fill and the stroke.
+        const tangents = splineTangents(sp);
+        const fillKey = `f:${col.css}`;
+        let fill = gcache.map.get(fillKey);
+        if (!fill) {
+          fill = ctx.createLinearGradient(0, PAD.top, 0, PAD.top + h);
+          // Fills stack where lines overlap, so they thin out as agents are added.
+          fill.addColorStop(0, withAlpha(col.rgba, 0.12 / Math.sqrt(Math.max(1, visibleCount))));
+          fill.addColorStop(1, withAlpha(col.rgba, 0));
+          gcache.map.set(fillKey, fill);
+        }
+        ctx.fillStyle = fill;
+        ctx.beginPath();
+        ctx.moveTo(sp[0].x, sp[0].y);
+        splinePath(ctx, sp, tangents);
+        ctx.lineTo(tip.x, PAD.top + h);
+        ctx.lineTo(sp[0].x, PAD.top + h);
+        ctx.closePath();
+        ctx.fill();
+
+        const lineKey = `l:${col.css}`;
+        let line = gcache.map.get(lineKey);
+        if (!line) {
+          line = ctx.createLinearGradient(PAD.left, 0, PAD.left + w, 0);
+          line.addColorStop(0, withAlpha(col.rgba, 0.15));
+          line.addColorStop(0.22, withAlpha(col.rgba, 0.75));
+          line.addColorStop(1, withAlpha(col.rgba, 1));
+          gcache.map.set(lineKey, line);
+        }
+        ctx.strokeStyle = line;
+        ctx.lineWidth = 1.75;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(sp[0].x, sp[0].y);
+        splinePath(ctx, sp, tangents);
+        ctx.stroke();
       }
-      ctx.strokeStyle = line;
-      ctx.lineWidth = 1.75;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.beginPath();
-      ctx.moveTo(sp[0].x, sp[0].y);
-      splinePath(ctx, sp, tangents);
-      ctx.stroke();
     }
 
     // Dual-axis companion: token rate, dashed, on the right axis.
@@ -228,6 +234,7 @@ export function drawFrame(
             if (PAD.left + w - tp[tp.length - 1].x < 1.5) tp[tp.length - 1] = tt;
             else tp.push(tt);
           }
+          drewAny = true;
           if (tp.length >= 2) {
             ctx.strokeStyle = withAlpha(col.rgba, 0.6);
             ctx.lineWidth = 1.25;
@@ -245,18 +252,20 @@ export function drawFrame(
     // Live dot: colored core with a soft halo, bg-colored pip for a crisp eye.
     // The halo breathes only when motion is allowed.
     const pulse = dc.reduceMotion || !live ? 0.5 : 0.5 + 0.5 * Math.sin(now / 420);
-    ctx.save();
-    ctx.shadowColor = col.css;
-    ctx.shadowBlur = live ? 8 + pulse * 6 : 0;
-    ctx.fillStyle = col.css;
-    ctx.beginPath();
-    ctx.arc(tip.x, tip.y, live ? 2.75 : 2.25, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-    ctx.fillStyle = tk.bg;
-    ctx.beginPath();
-    ctx.arc(tip.x, tip.y, 1, 0, Math.PI * 2);
-    ctx.fill();
+    if (tip) {
+      ctx.save();
+      ctx.shadowColor = col.css;
+      ctx.shadowBlur = live ? 8 + pulse * 6 : 0;
+      ctx.fillStyle = col.css;
+      ctx.beginPath();
+      ctx.arc(tip.x, tip.y, live ? 2.75 : 2.25, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = tk.bg;
+      ctx.beginPath();
+      ctx.arc(tip.x, tip.y, 1, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     if (L.anomalyDetection) {
       for (const an of store.anomalies.get(rec.id) ?? []) {
@@ -320,7 +329,13 @@ export function drawFrame(
   const hv = dc.hover;
   if (hv) {
     const rec = store.byId.get(hv.agentId);
-    if (!rec || !rec.visible || hv.t < view.tStart) {
+    if (
+      !rec ||
+      !rec.visible ||
+      hv.t < view.tStart ||
+      hv.metric !== view.metric ||
+      !primaryBuffer(store, hv.agentId, view)?.length
+    ) {
       hoverResult = 'gone';
     } else {
       const x = xOf(hv.t);
@@ -354,7 +369,9 @@ export function drawFrame(
         ? 'No agents to display'
         : visibleCount === 0
           ? 'All agents hidden — use the legend to show one'
-          : 'Waiting for telemetry…';
+          : view.metric !== 'tokens' && !store.list.some((r) => r.visible && store.progressKnown.has(r.id))
+            ? 'No agent has reported progress yet'
+            : 'Waiting for telemetry…';
     // A background halo keeps the message clear of the grid line behind it.
     ctx.lineWidth = 8;
     ctx.lineJoin = 'round';

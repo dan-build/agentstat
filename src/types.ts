@@ -25,11 +25,16 @@ export const AGENT_STATUSES: readonly AgentStatus[] = [
 
 /**
  * Which series the chart plots on the primary visual.
- * - 'progress' (default): the 0–100% progress curve.
+ * - 'auto' (default): progress once every visible agent reports it, else the
+ *   token rate — an agent that never reports progress has none to show.
+ * - 'progress': the 0–100% progress curve.
  * - 'tokens': the token-rate curve on a data-driven auto-scaled axis.
  * - 'both': progress on the left axis, token rate on the right (dual-axis).
+ *
+ * With 'progress' or 'both', an agent that hasn't reported progress has no
+ * line (its progress is unknown, not 0%).
  */
-export type ChartMetric = 'progress' | 'tokens' | 'both';
+export type ChartMetric = 'auto' | 'progress' | 'tokens' | 'both';
 
 export type AgentDataPoint = {
   /** Sample time in the `performance.now()` clock domain. */

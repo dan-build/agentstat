@@ -12,6 +12,8 @@ export type HoverInfo = {
   name: string;
   color: string;
   point: AgentDataPoint;
+  /** False while the agent hasn't reported progress (shown as unknown). */
+  progressKnown: boolean;
   x: number;
   y: number;
 };
@@ -31,7 +33,7 @@ export function Tooltip({ hover, innerRef }: { hover: HoverInfo; innerRef: React
         <span className="agentstat-tooltip-age">{formatAgo(hover.ageMs)}</span>
       </div>
       <div className="agentstat-tooltip-body">
-        {formatRate(hover.point.tokensRate)} · {formatPercent(hover.point.progress)} ·{' '}
+        {formatRate(hover.point.tokensRate)} · {hover.progressKnown ? formatPercent(hover.point.progress) : '–'} ·{' '}
         {formatStatus(hover.point.status)}
       </div>
     </div>

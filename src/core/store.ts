@@ -138,6 +138,8 @@ export class AgentStore {
   readonly status = new Map<string, StatusLog>();
   readonly live = new Map<string, LiveValues>();
   readonly anomalies = new Map<string, Anomaly[]>();
+  /** Agents that have reported progress (otherwise it's unknown, not 0%). */
+  readonly progressKnown = new Set<string>();
   /** Sticky token-axis ceiling, recomputed at most 4×/s by the view. */
   readonly axis = { bucket: -1, value: 0 };
   /** Set by any write that changes what's drawn; cleared by the renderer. */
@@ -234,7 +236,9 @@ export class AgentStore {
   private _create(a: Agent, now: number): AgentRecord {
     const rec = makeRecord(a);
     this.byId.set(a.id, rec);
-    const series = createSeries(rec, this.options.maxHistoryPoints, now);
+    // A starting value in the prop counts as reported; createAgent's 0 doesn't.
+    if (rec.current.progress > 0) this.progressKnown.add(a.id);
+    const series = createSeries(rec, this.options.maxHistoryPoints, now, this.progressKnown.has(a.id));
     this.progress.set(a.id, series.progress);
     this.tokens.set(a.id, series.tokens);
     this.status.set(a.id, series.status);
@@ -344,6 +348,7 @@ export class AgentStore {
     this._statusSince.delete(id);
     this._workSince.delete(id);
     this._sourced.delete(id);
+    this.progressKnown.delete(id);
     this._streams.delete(id);
     this._sim.delete(id);
   }
@@ -397,8 +402,9 @@ export class AgentStore {
     const pBuf = this.progress.get(rec.id);
     const tBuf = this.tokens.get(rec.id);
     if (!pBuf || !tBuf) return;
-    // Rate and progress are sampled together so both series stay aligned.
-    pBuf.push(now, rec.current.progress);
+    // Rate and progress are sampled together so both series stay aligned
+    // (progress only once the agent has reported it).
+    if (this.progressKnown.has(rec.id)) pBuf.push(now, rec.current.progress);
     tBuf.push(now, rec.current.tokensRate);
     // While paused, retention is measured from the pause so the frozen view
     // keeps its history.
@@ -443,7 +449,10 @@ export class AgentStore {
 
     const cur = rec.current;
     if (tokensRate !== undefined) cur.tokensRate = tokensRate;
-    if (progress !== undefined) cur.progress = progress;
+    if (progress !== undefined) {
+      cur.progress = progress;
+      this.progressKnown.add(id);
+    }
     if (confidenceScore !== undefined) cur.confidenceScore = confidenceScore;
     if (errorCount !== undefined) cur.errorCount = errorCount;
     if (latencyMs !== undefined) {
@@ -648,6 +657,7 @@ export class AgentStore {
       this._sim.set(rec.id, step.state);
       rec.current.tokensRate = step.tokensRate;
       rec.current.progress = step.progress;
+      this.progressKnown.add(rec.id);
       rec.current.confidenceScore = step.confidenceScore;
       this._simTouched.add(rec.id);
       this._setStatus(rec, step.status, now, step.tokensRate > this._idleRate);
@@ -863,12 +873,17 @@ export class AgentStore {
     };
   }
 
-  getLiveMetrics(id: string): LiveValues | undefined {
+  getLiveMetrics(id: string): (LiveValues & { progressKnown: boolean }) | undefined {
     const lv = this.live.get(id);
     const rec = this.byId.get(id);
     if (!lv || !rec) return undefined;
     // Status is discrete and never eased: report it as of now.
-    return { tokensRate: lv.tokensRate, progress: lv.progress, status: rec.current.status };
+    return {
+      tokensRate: lv.tokensRate,
+      progress: lv.progress,
+      status: rec.current.status,
+      progressKnown: this.progressKnown.has(id),
+    };
   }
 
   // ── Row snapshot (useSyncExternalStore) ────────────────────────────────
