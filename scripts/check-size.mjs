@@ -18,7 +18,7 @@ import { build } from 'esbuild';
 // per agent-hour on a fresh holdout, without hand-computed rates) → event
 // streams 22.4 KB (`createAgentStream` + `source`: agents and history arrive
 // without wiring; the base for the AI SDK / AG-UI adapters) → unknown
-// progress 22.5 KB (`metric="auto"`: no flat 0% line for agents that never
+// progress 22.7 KB (`metric="auto"`: no flat 0% line for agents that never
 // report progress).
 const BUDGETS = { 'dist/index.js': 23_000, 'dist/index.cjs': 23_500 };
 // The standalone detectors (detectAnomalies) on their own.

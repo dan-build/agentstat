@@ -25,7 +25,7 @@ export const AGENT_STATUSES: readonly AgentStatus[] = [
 
 /**
  * Which series the chart plots on the primary visual.
- * - 'auto' (default): progress once any visible agent reports it, else the
+ * - 'auto' (default): progress once every visible agent reports it, else the
  *   token rate — an agent that never reports progress has none to show.
  * - 'progress': the 0–100% progress curve.
  * - 'tokens': the token-rate curve on a data-driven auto-scaled axis.

@@ -98,8 +98,8 @@ export default function App() {
   // `?theme=light&metric=tokens` preselects the demo state (handy for screenshots).
   const params = new URLSearchParams(window.location.search);
   const [mode, setMode] = useState<Mode>(params.get('theme') === 'light' ? 'light' : 'dark');
-  const [metric, setMetric] = useState<'progress' | 'tokens' | 'both'>(
-    (['progress', 'tokens', 'both'] as const).find((m) => m === params.get('metric')) ?? 'progress'
+  const [metric, setMetric] = useState<'auto' | 'progress' | 'tokens' | 'both'>(
+    (['auto', 'progress', 'tokens', 'both'] as const).find((m) => m === params.get('metric')) ?? 'progress'
   );
   const t = THEMES[mode];
 
@@ -199,7 +199,7 @@ export default function App() {
           </span>
           {/* Metric switch — puts the SAME quantity on the line and the cards */}
           <div style={{ display: 'flex', border: `1px solid ${t.border}`, borderRadius: 7, overflow: 'hidden' }}>
-            {(['progress', 'tokens', 'both'] as const).map((m, i) => (
+            {(['auto', 'progress', 'tokens', 'both'] as const).map((m, i) => (
               <button
                 key={m}
                 onClick={() => setMetric(m)}

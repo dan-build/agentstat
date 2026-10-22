@@ -51,11 +51,13 @@ export function computeView(
   const h = Math.max(1, cssH - PAD.top - PAD.bottom);
   const viewNow = store.pausedAt ?? now;
   const winMs = opts.windowSeconds !== undefined && opts.windowSeconds > 0 ? opts.windowSeconds * 1000 : undefined;
-  // 'auto': progress once any visible agent reports it, else token rate.
+  // 'auto': progress once every visible agent reports it, else token rate
+  // (which every agent has), so no agent is left without a line.
+  const shown = store.list.filter((r) => r.visible);
   const metric: Exclude<ChartMetric, 'auto'> =
     opts.metric !== 'auto'
       ? opts.metric
-      : store.list.some((r) => r.visible && store.progressKnown.has(r.id))
+      : shown.length > 0 && shown.every((r) => store.progressKnown.has(r.id))
         ? 'progress'
         : 'tokens';
   const primaryIsTokens = metric === 'tokens';

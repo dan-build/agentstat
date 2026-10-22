@@ -43,11 +43,12 @@ export const makeRecord = (a: Agent): AgentRecord => {
  * declared. No backfilled history — a telemetry chart must not draw data
  * that never happened.
  */
-export const createSeries = (rec: AgentRecord, maxHistoryPoints: number, now: number) => {
+export const createSeries = (rec: AgentRecord, maxHistoryPoints: number, now: number, progressKnown: boolean) => {
   const cap = Math.max(2, Math.floor(maxHistoryPoints) || DEFAULT_CAP);
   const progress = new TimeSeriesBuffer(cap);
   const tokens = new TimeSeriesBuffer(cap);
-  progress.push(now, rec.current.progress);
+  // Unknown progress has no samples (not 0%) until the agent reports it.
+  if (progressKnown) progress.push(now, rec.current.progress);
   tokens.push(now, rec.current.tokensRate);
   const status = new StatusLog();
   status.record(now, rec.current.status);

@@ -236,14 +236,14 @@ export class AgentStore {
   private _create(a: Agent, now: number): AgentRecord {
     const rec = makeRecord(a);
     this.byId.set(a.id, rec);
-    const series = createSeries(rec, this.options.maxHistoryPoints, now);
+    // A starting value in the prop counts as reported; createAgent's 0 doesn't.
+    if (rec.current.progress > 0) this.progressKnown.add(a.id);
+    const series = createSeries(rec, this.options.maxHistoryPoints, now, this.progressKnown.has(a.id));
     this.progress.set(a.id, series.progress);
     this.tokens.set(a.id, series.tokens);
     this.status.set(a.id, series.status);
     this._statusSince.set(a.id, now);
     this._workSince.set(a.id, now);
-    // A starting value in the prop counts; createAgent's 0 doesn't.
-    if (rec.current.progress > 0) this.progressKnown.add(a.id);
     return rec;
   }
 
@@ -402,8 +402,9 @@ export class AgentStore {
     const pBuf = this.progress.get(rec.id);
     const tBuf = this.tokens.get(rec.id);
     if (!pBuf || !tBuf) return;
-    // Rate and progress are sampled together so both series stay aligned.
-    pBuf.push(now, rec.current.progress);
+    // Rate and progress are sampled together so both series stay aligned
+    // (progress only once the agent has reported it).
+    if (this.progressKnown.has(rec.id)) pBuf.push(now, rec.current.progress);
     tBuf.push(now, rec.current.tokensRate);
     // While paused, retention is measured from the pause so the frozen view
     // keeps its history.
@@ -872,12 +873,17 @@ export class AgentStore {
     };
   }
 
-  getLiveMetrics(id: string): LiveValues | undefined {
+  getLiveMetrics(id: string): (LiveValues & { progressKnown: boolean }) | undefined {
     const lv = this.live.get(id);
     const rec = this.byId.get(id);
     if (!lv || !rec) return undefined;
     // Status is discrete and never eased: report it as of now.
-    return { tokensRate: lv.tokensRate, progress: lv.progress, status: rec.current.status };
+    return {
+      tokensRate: lv.tokensRate,
+      progress: lv.progress,
+      status: rec.current.status,
+      progressKnown: this.progressKnown.has(id),
+    };
   }
 
   // ── Row snapshot (useSyncExternalStore) ────────────────────────────────

@@ -179,10 +179,13 @@ export interface AgentStatRef {
   getHealth: (id: string) => HealthMetrics | undefined;
   /** Anomalies currently active for an agent (empty if none or detection off). */
   getAnomalies: (id: string) => Anomaly[];
-  /** Values currently drawn at the live tip (eased toward the latest sample). */
+  /**
+   * Values currently drawn at the live tip (eased toward the latest sample).
+   * `progress` is 0 and `progressKnown` false until the agent reports progress.
+   */
   getLiveMetrics: (
     id: string
-  ) => { tokensRate: number; progress: number; status: AgentStatus } | undefined;
+  ) => { tokensRate: number; progress: number; status: AgentStatus; progressKnown: boolean } | undefined;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -690,7 +693,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
       progress: view.primaryIsTokens ? (companion ?? rec.current.progress) : rawV,
       status: store.status.get(rec.id)?.statusAt(p.t) ?? rec.current.status,
     };
-    hoverRef.current = { agentId: rec.id, t: p.t, drawV: p.v };
+    hoverRef.current = { agentId: rec.id, t: p.t, drawV: p.v, metric: view.metric };
     const idx = store.list.indexOf(rec);
     const palette = themeRef.current.t.palette;
     setHover({
@@ -777,7 +780,8 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
     e.preventDefault();
     const view = currentView();
     if (!view) return;
-    const visible = store.list.filter((r) => r.visible);
+    // Only agents with a line (not unknown progress) can be inspected.
+    const visible = store.list.filter((r) => r.visible && (primaryBuffer(store, r.id, view)?.length ?? 0) > 0);
     if (visible.length === 0) return;
     let ai = Math.max(0, visible.findIndex((r) => r.id === hoverRef.current?.agentId));
     if (e.key === 'ArrowUp') ai = (ai - 1 + visible.length) % visible.length;
