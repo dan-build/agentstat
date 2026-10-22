@@ -4,6 +4,37 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
 
 ## [0.5.0] — Unreleased
 
+### Added
+
+- **Stream events: `ref.push(id, event)`.** Forward what your stream emits —
+  `start`, `tokens` (a chunk `count` or a running `total`), `tool-start` /
+  `tool-end` (nested and parallel calls, `error: true`), `error`, `finish`,
+  each with an optional `time` — and AgentStat derives the token rate, time to
+  first token, inter-token latency and status. No hand-computed rates: the
+  rate window adapts to how often tokens arrive, so per-chunk and batched
+  delivery read as a steady rate, and the rate drops to zero as soon as the
+  model hands off to a tool or finishes. TTFT feeds the health score's
+  latency trend. `updateAgent` is unchanged.
+- **`ref.getStats(id)`**: total tokens, TTFT, inter-token latency, the open
+  tool call and time in the current status.
+- **`waiting` status** for an agent blocked on something outside the model (a
+  tool call, subagents, a person), with its own icon. Quiet output is expected
+  while waiting: only a wait longer than **`waitingStallMs`** (5 min) is a
+  stall, reported as `waiting on run_tests for 300s`. Moving between
+  `waiting` and the other working states isn't thrash. `push` sets it for
+  tool calls; with `updateAgent`, report it yourself. **Type change:**
+  `AgentStatus` has a new member, so exhaustive `switch`es over it need a
+  `waiting` case.
+- **Measured.** The detector evaluation gains two sets of event-driven agents:
+  one written with this change, and a fresh holdout of 20 scenarios written
+  by a reviewer who saw neither the detectors nor the other sets (chat
+  streams, tool-heavy coding agents, orchestrators, reasoning models, hung
+  tools, dropped streams, repetition loops). On that holdout: 100% recall
+  (10/10); precision 28.8% → 53.1% and false alarms 6.6 → 2.4 per agent-hour
+  after one round of fixes to how the rate is derived (the first figures are
+  from before any change made after seeing it). The earlier three sets are
+  unchanged.
+
 ### Changed
 
 - **Internal architecture.** The 2,100-line component is split into a
@@ -71,6 +102,12 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
     hiding a stall; naturally slow agents (under 0.5 t/s) aren't "stalled";
     output returning after a stall isn't a spike; when the caller never sends
     a status, only total silence counts as a stall.
+  - **Stall clock:** quiet time while `waiting` or `complete`, or while
+    `thinking` before output starts, is no longer counted toward a stall in
+    the next status — each is judged by its own limit.
+  - **Reference rate** is a plain average of the agent's first 10 s of
+    output before the slow average takes over, so a start-up ramp can't make
+    normal output look like a runaway later.
   - **Detector history** no longer depends on the visible window: the store
     keeps what the slowest rule needs (75 s by default), so stall durations
     are reported in full and thinking stalls can escalate.

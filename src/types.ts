@@ -3,12 +3,22 @@
 // Public data types. Kept in a leaf module so the helpers (status log, anomaly
 // detection, health scoring) can import them without importing the component.
 
-export type AgentStatus = 'active' | 'stuck' | 'thinking' | 'complete' | 'hallucinating';
+/**
+ * - `active`: producing output.
+ * - `thinking`: working without output (reasoning, reading a tool result).
+ * - `waiting`: blocked on something outside the model — a tool call,
+ *   subagents, a person. Quiet output is expected; only a very long wait
+ *   (`AnomalyConfig.waitingStallMs`) counts as a stall.
+ * - `stuck`, `hallucinating`: problems you detected yourself.
+ * - `complete`: done (or idle between jobs).
+ */
+export type AgentStatus = 'active' | 'stuck' | 'thinking' | 'waiting' | 'complete' | 'hallucinating';
 
 export const AGENT_STATUSES: readonly AgentStatus[] = [
   'active',
   'stuck',
   'thinking',
+  'waiting',
   'complete',
   'hallucinating',
 ];
@@ -98,4 +108,49 @@ export type Agent = {
   };
   /** Initial visibility (default true). Legend clicks toggle it at runtime. */
   visible?: boolean;
+};
+
+/**
+ * A raw stream event, for `ref.current.push(id, event)`. AgentStat derives the
+ * token rate, time to first token, inter-token latency and status from these,
+ * so you forward what your stream emits instead of computing rates yourself.
+ *
+ * `time` is optional, in the `performance.now()` clock (default: now). Events
+ * must arrive in order; a time earlier than the previous event's is treated
+ * as the previous event's time.
+ */
+export type AgentEvent =
+  /** A model request was sent. Status → `thinking`; starts the TTFT clock. */
+  | { type: 'start'; time?: number }
+  /**
+   * Output arrived. Pass `count` (tokens in this chunk) or `total` (running
+   * count for the agent; a smaller total than before starts a new count).
+   * Status → `active`.
+   */
+  | { type: 'tokens'; count?: number; total?: number; time?: number }
+  /** A tool call began (nest freely). Status → `waiting` while any is open. */
+  | { type: 'tool-start'; name?: string; time?: number }
+  /**
+   * A tool call returned. Closes the most recent open call with this `name`
+   * (or the most recent one). Status → `thinking` once none are open.
+   * `error: true` also counts an error.
+   */
+  | { type: 'tool-end'; name?: string; error?: boolean; time?: number }
+  /** Something failed. Increments `errorCount`. */
+  | { type: 'error'; time?: number }
+  /** The run finished. Status → `complete`; open tool calls are closed. */
+  | { type: 'finish'; time?: number };
+
+/** What AgentStat derived from an agent's events (see `AgentEvent`). */
+export type AgentStreamStats = {
+  /** Tokens counted from `tokens` events since the agent was added. */
+  totalTokens: number;
+  /** Time from the last `start` (or `tool-end`) to the first token after it. */
+  ttftMs: number | null;
+  /** Typical gap between token events while streaming (moving average). */
+  interTokenMs: number | null;
+  /** Name of the innermost open tool call ('' if unnamed), or null. */
+  tool: string | null;
+  /** How long the agent has been in its current status, in ms. */
+  statusMs: number;
 };

@@ -12,8 +12,11 @@ import { build } from 'esbuild';
 // min+gzip): 0.4.1 17.3 KB → store/renderer split 17.8 KB → typed-array ring
 // buffer + M4 downsampling 18.0 KB (buffer recompute 4–6× faster, 3.4× less
 // memory; see scripts/bench-buffer.mjs) → detectors v2 19.6 KB (false alarms
-// on all three eval sets 49 → 2.9 per agent-hour; see scripts/eval-detectors.mjs).
-const BUDGETS = { 'dist/index.js': 20_000, 'dist/index.cjs': 20_500 };
+// on all three eval sets 49 → 2.9 per agent-hour; see scripts/eval-detectors.mjs)
+// → event ingest 20.9 KB (`push` derives rate/TTFT/status from raw stream
+// events, plus the `waiting` status: false alarms for tool-heavy agents drop to
+// ~2.5 per agent-hour without hand-computed rates).
+const BUDGETS = { 'dist/index.js': 21_500, 'dist/index.cjs': 22_000 };
 // The standalone detectors (detectAnomalies) on their own.
 const TREESHAKE_BUDGET = 2_500;
 

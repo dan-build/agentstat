@@ -52,20 +52,45 @@ export default function Monitor() {
   const ref = useRef<AgentStatRef>(null);
   const agents = useMemo(() => [createAgent('planner', 'Planner'), createAgent('coder', 'Coder')], []);
 
-  // From your telemetry source (stream callbacks, WebSocket, SSE, MCP, …):
-  // ref.current?.updateAgent('planner', { tokensRate: 18.4, status: 'active' });
+  // Forward what your stream emits (stream callbacks, WebSocket, SSE, MCP, …):
+  // ref.current?.push('planner', { type: 'tokens', count: 12 });
 
   return <AgentStat ref={ref} agents={agents} metric="tokens" anomalyDetection height={420} />;
 }
 ```
 
-`updateAgent` takes a partial sample, so report only what changed:
+### Stream events
+
+`push` takes raw events, and AgentStat derives the token rate, time to first
+token, inter-token latency and status from them, so you don't compute rates:
+
+```ts
+ref.current?.push('coder', { type: 'start' });                     // → thinking
+ref.current?.push('coder', { type: 'tokens', count: 7 });          // → active (or { total: 1240 })
+ref.current?.push('coder', { type: 'tool-start', name: 'bash' });  // → waiting
+ref.current?.push('coder', { type: 'tool-end', name: 'bash' });    // → thinking
+ref.current?.push('coder', { type: 'finish' });                    // → complete
+ref.current?.getStats('coder'); // { totalTokens, ttftMs, interTokenMs, tool, statusMs }
+```
+
+Every event takes an optional `time` (`performance.now()` clock). Tool calls
+can nest or run in parallel; the agent is `waiting` while any is open. TTFT
+also feeds the health score's latency trend. Send `finish` when a run ends:
+an agent left `active` with no output is a stall.
+
+### Samples
+
+If you already have rates, `updateAgent` takes a partial sample, so report
+only what changed:
 
 ```ts
 ref.current?.updateAgent('planner', { tokensRate: 18.4 });
 ref.current?.updateAgent('planner', { status: 'thinking' });
 ref.current?.updateAgent('planner', { latencyMs: 820, progress: 40 });
+ref.current?.updateAgent('planner', { status: 'waiting' }); // tool call, subagents, a person
 ```
+
+Use `push` or `updateAgent`'s `tokensRate` for an agent, not both.
 
 The positional form `updateAgent(id, tokensRate, progress, status)` still works.
 
@@ -79,10 +104,8 @@ render is fine.
 ### Vercel AI SDK
 
 [`examples/vercel-ai-sdk.tsx`](./examples/vercel-ai-sdk.tsx) wires `useChat`
-(AI SDK v5+). It maps the chat `status` to agent status and measures the token
-rate from the streamed text over a sliding 1-second window. It also keeps
-sampling while a response is in flight, so a stream that goes quiet shows up as
-a stall.
+(AI SDK v5+). It forwards the chat's lifecycle, streamed text and tool calls
+as events.
 
 More integrations — LangChain, WebSocket/SSE, MCP — are in the
 [integration guide](https://agentstat.sdaniel.cc/docs/real-data-integration/).
@@ -120,9 +143,9 @@ wall-clock window; long windows are downsampled to the canvas resolution.
 
 | Kind | Meaning | How it's detected |
 |------|---------|-------------------|
-| **stall** | Claims to be working but isn't producing — a hung call, a dropped stream. | Output below 5% of the agent's normal rate for 10 s while `active` (30 s while `thinking`, since reasoning is quiet), or no data at all for that long. |
+| **stall** | Claims to be working but isn't producing — a hung call, a dropped stream. | Output below 5% of the agent's normal rate for 10 s while `active` (30 s while `thinking`, since reasoning is quiet), or no data at all for that long. While `waiting`, only a wait over 5 minutes (`waitingStallMs`). |
 | **spike** | A runaway: burning tokens far above normal. | Compared with the agent's own usual peak: a sustained jump (last second ≥ 1.5×), a lone burst (≥ 4×), or a climb that keeps rising over 30 s. Bursty output and resuming after a pause don't count. |
-| **thrash** | Flapping between states. | 4 status changes within 4 s that involve a problem state (moving between `active`, `thinking` and `complete` is normal). |
+| **thrash** | Flapping between states. | 4 status changes within 4 s that involve a problem state (moving between `active`, `thinking`, `waiting` and `complete` is normal). |
 
 Each anomaly carries the numbers that triggered it (`stalled 12s while active`,
 `runaway output 100/s (4.4× the usual peak of ~23/s)`).
@@ -140,15 +163,19 @@ Each anomaly carries the numbers that triggered it (`stalled 12s while active`,
 **Limitations.** The detectors only see token rate and status, so keep the
 status current (including `complete` when an agent is idle):
 
-- **Waiting isn't distinguishable from stalling.** A tool call, an
-  orchestrator waiting on workers, or a user who stopped typing all look like
-  "no output". That alerts after 10 s while `active` and after 30 s while
-  `thinking`. If your agents routinely wait longer, raise `stallDurationMs` /
-  `thinkingStallMs`, or report `complete` while idle.
-- **Tool-call loops** that only alternate `active` and `thinking` aren't
-  flagged as thrash: that alternation is also how healthy agents work.
+- **Report waiting.** A tool call, an orchestrator waiting on workers, or a
+  user who stopped typing all look like "no output". With `push`, tool calls
+  set `waiting` for you; otherwise report `waiting` (or `complete` while
+  idle). Waiting reported as `active` alerts after 10 s, as `thinking` after
+  30 s.
+- **A wait that never ends** is only flagged after `waitingStallMs` (5 min):
+  AgentStat can't tell that the workers an orchestrator waits on are gone.
+- **Requests that differ a lot in speed** (one run at 80 t/s, the next at
+  150) can briefly read as a runaway after a pause.
+- **Tool-call loops** that only alternate working states aren't flagged as
+  thrash: that alternation is also how healthy agents work.
 - **Rates computed per small chunk** (alternating 0 and high values) can hide
-  runaways; send a rate averaged over about a second.
+  runaways; use `push`, or send a rate averaged over about a second.
 - **If you only send rates and never a status**, only a stream that goes
   completely silent counts as a stall. Sending a status even once turns full
   stall detection on.
@@ -214,12 +241,23 @@ interface AgentStatRef {
   getHealth(id: string): HealthMetrics | undefined;
   getAnomalies(id: string): Anomaly[];
   getLiveMetrics(id: string): { tokensRate: number; progress: number; status: AgentStatus } | undefined;
+  push(id: string, event: AgentEvent): void;
+  getStats(id: string): AgentStreamStats | undefined;
 }
+
+type AgentEvent = { time?: number } & (
+  | { type: 'start' }
+  | { type: 'tokens'; count?: number; total?: number }
+  | { type: 'tool-start'; name?: string }
+  | { type: 'tool-end'; name?: string; error?: boolean }
+  | { type: 'error' }
+  | { type: 'finish' }
+);
 
 type AgentSample = {
   tokensRate?: number;
   progress?: number;        // 0–100
-  status?: AgentStatus;     // 'active' | 'thinking' | 'stuck' | 'complete' | 'hallucinating'
+  status?: AgentStatus;     // 'active' | 'thinking' | 'waiting' | 'stuck' | 'complete' | 'hallucinating'
   latencyMs?: number;       // enables latencyTrend
   confidenceScore?: number; // 0–1, enables hallucinationRisk
   errorCount?: number;

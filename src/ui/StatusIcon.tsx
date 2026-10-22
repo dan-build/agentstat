@@ -18,6 +18,12 @@ export const StatusIcon = ({ status }: { status: AgentStatus }) => {
           <circle cx="8.5" cy="5" r="1.1" />
         </svg>
       );
+    case 'waiting':
+      return (
+        <svg {...common} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M2.2 1h5.6M2.2 9h5.6M2.8 1.2 5 5l2.2-3.8M2.8 8.8 5 5l2.2 3.8" />
+        </svg>
+      );
     case 'stuck':
       return (
         <svg {...common} fill="currentColor">
