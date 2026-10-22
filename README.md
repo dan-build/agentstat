@@ -137,14 +137,21 @@ Each anomaly carries the numbers that triggered it (`stalled 12s while active`,
   scenarios through the real store, including an adversarial set and a holdout
   set written by independent reviewers.
 
-**Limitations.** The detectors only see token rate and status:
+**Limitations.** The detectors only see token rate and status, so keep the
+status current (including `complete` when an agent is idle):
 
-- **A long tool call reported as `active`** looks like a stall after 10 s.
-  Raise `stallDurationMs`, or report `thinking` while a tool runs.
+- **Waiting isn't distinguishable from stalling.** A tool call, an
+  orchestrator waiting on workers, or a user who stopped typing all look like
+  "no output". That alerts after 10 s while `active` and after 30 s while
+  `thinking`. If your agents routinely wait longer, raise `stallDurationMs` /
+  `thinkingStallMs`, or report `complete` while idle.
+- **Tool-call loops** that only alternate `active` and `thinking` aren't
+  flagged as thrash: that alternation is also how healthy agents work.
 - **Rates computed per small chunk** (alternating 0 and high values) can hide
   runaways; send a rate averaged over about a second.
-- **If you never send a status**, only a stream that goes completely silent
-  counts as a stall.
+- **If you only send rates and never a status**, only a stream that goes
+  completely silent counts as a stall. Sending a status even once turns full
+  stall detection on.
 
 ```tsx
 <AgentStat agents={agents} anomalyDetection anomalyConfig={{ stallDurationMs: 20_000, spikeRatio: 2 }} />

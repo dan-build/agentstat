@@ -43,9 +43,13 @@ export interface Anomaly {
 export interface AgentContext {
   /**
    * A slow-moving reference for the agent's normal active rate (minutes
-   * long), so a gradual decay can't drag the idle level down with it.
+   * long), so a gradual decay can't drag the idle level down with it, and
+   * output after a pause can be judged against what is normal for the agent.
+   * Only pass it once it reflects real activity (not a start-up ramp).
    */
   referenceRate?: number;
+  /** A stall is currently being reported for this agent. */
+  stallOpen?: boolean;
   /**
    * Whether the caller has ever reported a status. When only rates are sent,
    * `active` means "unknown": a quiet stretch may just be a user who stopped
@@ -122,6 +126,8 @@ export const DEFAULT_ANOMALY_CONFIG: AnomalyConfig = {
 
 /** Minimum length of the "recent" window whose output is compared. */
 const RECENT_MS = 1_000;
+/** After a pause, output must stay high for this many consecutive seconds. */
+const AFTER_IDLE_SECONDS = 3;
 /** Minimum span the active baseline must cover before spikes are judged. */
 const WARMUP_MS = 3_000;
 /** A single sample this far above the usual peak is a burst on its own. */
@@ -269,6 +275,50 @@ export function detectStall(
 }
 
 /**
+ * Spike check after a stall or a long pause, when the recent window can't
+ * serve as a baseline (it is mostly idle, or already contains what follows
+ * the pause): compare with the agent's slow normal rate, and require each of
+ * the last 3 seconds to be well above it — a backlog flushed in a second
+ * isn't a runaway, output that stays high is. Without a normal rate (a young
+ * agent) nothing is judged.
+ */
+function afterIdleSpike(
+  tokens: TokenSample[],
+  cfg: AnomalyConfig,
+  now: number,
+  ctx?: AgentContext
+): Anomaly | null {
+  const ref = ctx?.referenceRate ?? 0;
+  if (ref < cfg.spikeMinBaselineRate) return null;
+  let total = 0;
+  let count = 0;
+  for (let k = 0; k < AFTER_IDLE_SECONDS; k++) {
+    let sum = 0;
+    let n = 0;
+    for (const s of tokens) {
+      if (s.t > now - (k + 1) * 1000 && s.t <= now - k * 1000) {
+        sum += s.v;
+        n++;
+      }
+    }
+    if (!n || sum / n < cfg.spikeRatio * ref || sum / n - ref < cfg.spikeMinIncrease) return null;
+    total += sum;
+    count += n;
+  }
+  const v = total / count;
+  const ratio = v / ref;
+  const fmt = (x: number) => x.toFixed(x < 10 ? 1 : 0);
+  return {
+    kind: 'spike',
+    severity: ratio >= 3 ? 'critical' : 'warning',
+    t: now,
+    message: `runaway output ${fmt(v)}/s (${ratio.toFixed(1)}× the agent's normal ~${fmt(ref)}/s)`,
+    value: v,
+    baseline: ref,
+  };
+}
+
+/**
  * Detect a SPIKE / runaway: output clearly above the agent's usual peak — the
  * 95th percentile of its active (non-idle) rate over the preceding
  * `spikeBaselineMs`. Three ways in:
@@ -324,9 +374,14 @@ export function detectSpike(
         lastT = s.t;
       }
     }
-    // Warm-up, and a mostly idle baseline (resuming after a pause) isn't a norm.
-    if (baseline.length < cfg.spikeMinSamples || lastT - firstT < WARMUP_MS) return null;
-    if (baseline.length < total / 2) return null;
+    const usable =
+      baseline.length >= cfg.spikeMinSamples && lastT - firstT >= WARMUP_MS && baseline.length >= total / 2;
+    // After a stall or a long pause the recent window isn't a norm: judge
+    // against what is normal for the agent, and only sustained output.
+    if (!usable || ctx?.stallOpen) {
+      if (episode) return null;
+      return afterIdleSpike(tokens, cfg, now, ctx);
+    }
     peakNorm = quantile(baseline, 0.95);
   }
   if (peakNorm < cfg.spikeMinBaselineRate) return null;
@@ -470,12 +525,11 @@ export function detectAnomalies(
   const out: Anomaly[] = [];
   const stall = detectStall(tokens, currentStatus, now, cfg, ctx);
   if (stall) out.push(stall);
-  // Output returning after a stall is recovery, not a runaway: no spikes
-  // while a stall is being reported.
-  if (!stall && !open?.has('stall')) {
-    const spike = detectSpike(tokens, cfg, now, open?.get('spike'), ctx);
-    if (spike) out.push(spike);
-  }
+  // While a stall is reported, output returning is judged as recovery unless
+  // it stays well above the agent's normal rate (see afterIdleSpike).
+  const stallOpen = !!stall || !!open?.has('stall');
+  const spike = detectSpike(tokens, cfg, now, open?.get('spike'), { ...ctx, stallOpen });
+  if (spike) out.push(spike);
   const thrash = detectThrash(changes, now, cfg);
   if (thrash) out.push(thrash);
   return out;

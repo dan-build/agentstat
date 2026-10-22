@@ -65,6 +65,9 @@ export interface StoreOptions {
   maxHistoryPoints: number;
 }
 
+// Active time the slow reference rate needs before the detectors may use it.
+const REFERENCE_WARMUP_MS = 10_000;
+
 type Episode = {
   since: number;
   baseline?: number;
@@ -119,6 +122,8 @@ export class AgentStore {
   private _pendingEvents: StoreEvent[] = [];
   // Per-agent slow reference of the normal active rate (detector context).
   private _refRate = new Map<string, number>();
+  // Active time (ms) behind each reference, so a start-up ramp can't set it.
+  private _refActiveMs = new Map<string, number>();
   // Agents whose caller has reported a status at least once.
   private _statusReported = new Set<string>();
   // History the detectors need for the current config.
@@ -197,6 +202,7 @@ export class AgentStore {
     this.anomalies.delete(id);
     this._locked.delete(id);
     this._refRate.delete(id);
+    this._refActiveMs.delete(id);
     this._statusReported.delete(id);
     this._sim.delete(id);
   }
@@ -370,12 +376,14 @@ export class AgentStore {
           }
         }
         if (n) {
+          this._refActiveMs.set(rec.id, (this._refActiveMs.get(rec.id) ?? 0) + (dt || 500));
           const prev = this._refRate.get(rec.id);
           const a = prev === undefined ? 1 : 1 - Math.exp(-(dt || 500) / 300_000);
           this._refRate.set(rec.id, prev === undefined ? sum / n : prev + (sum / n - prev) * a);
         }
         found = detectAnomalies(tokens, changes, rec.current.status, now, cfg, open, {
-          referenceRate: this._refRate.get(rec.id),
+          // Only once it reflects real activity, not a start-up ramp.
+          referenceRate: (this._refActiveMs.get(rec.id) ?? 0) >= REFERENCE_WARMUP_MS ? this._refRate.get(rec.id) : undefined,
           statusReported: this._statusReported.has(rec.id),
         });
         const prev = this.anomalies.get(rec.id) ?? [];
