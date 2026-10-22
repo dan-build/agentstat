@@ -349,3 +349,54 @@ describe('draw path (real geometry)', () => {
     }
   );
 });
+
+describe('anomaly episodes', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('reports when an anomaly ends, once', async () => {
+    const onAnomaly = vi.fn();
+    const onAnomalyEnd = vi.fn();
+    const ref = createRef<AgentStatRef>();
+    render(
+      <AgentStat
+        ref={ref}
+        agents={[makeAgent('e', { name: 'Worker' })]}
+        anomalyDetection
+        anomalyConfig={{ stallDurationMs: 1000 }}
+        onAnomaly={onAnomaly}
+        onAnomalyEnd={onAnomalyEnd}
+      />
+    );
+    for (let i = 0; i < 20; i++) {
+      act(() => ref.current?.updateAgent('e', 0, 1, 'active'));
+      await tick(100);
+    }
+    expect(onAnomaly.mock.calls.some(([, a]) => a.kind === 'stall')).toBe(true);
+    expect(onAnomalyEnd).not.toHaveBeenCalled();
+    for (let i = 0; i < 80; i++) {
+      act(() => ref.current?.updateAgent('e', 15, 2, 'active'));
+      await tick(100);
+    }
+    const ends = onAnomalyEnd.mock.calls.filter(([, a]) => a.kind === 'stall');
+    expect(ends).toHaveLength(1);
+    expect(screen.getAllByRole('status').some((el) => /Worker: stall resolved/.test(el.textContent ?? ''))).toBe(true);
+  });
+});
+
+describe('detector history', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('keeps enough history for a thinking stall to escalate and report its true length', async () => {
+    const onAnomaly = vi.fn();
+    const ref = createRef<AgentStatRef>();
+    render(<AgentStat ref={ref} agents={[makeAgent('w')]} anomalyDetection onAnomaly={onAnomaly} />);
+    for (let i = 0; i < 70; i++) {
+      act(() => ref.current?.updateAgent('w', { tokensRate: 0, status: 'thinking' }));
+      await tick(1000);
+    }
+    const crit = onAnomaly.mock.calls.find(([, a]) => a.kind === 'stall' && a.severity === 'critical');
+    expect(crit?.[1].message).toMatch(/stalled (6\d)s while thinking/);
+  });
+});

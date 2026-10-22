@@ -28,6 +28,7 @@ import {
   EPISODE_GRACE_MS,
   HEALTH_WINDOW_MS,
   LATENCY_HISTORY,
+  DETECTOR_HISTORY_MS,
   clamp,
   lerp,
   warnOnce,
@@ -56,6 +57,7 @@ export type RowSnapshot = {
 /** Emitted by a health tick, in order, for the component to act on. */
 export type StoreEvent =
   | { kind: 'anomaly'; id: string; name: string; anomaly: Anomaly }
+  | { kind: 'resolved'; id: string; name: string; anomaly: Anomaly }
   | { kind: 'health'; id: string; health: HealthMetrics };
 
 export interface StoreOptions {
@@ -63,7 +65,17 @@ export interface StoreOptions {
   maxHistoryPoints: number;
 }
 
-type Episode = { severity: AnomalySeverity; lastSeen: number };
+// Active time the slow reference rate needs before the detectors may use it.
+const REFERENCE_WARMUP_MS = 10_000;
+
+type Episode = {
+  since: number;
+  baseline?: number;
+  severity: AnomalySeverity;
+  lastSeen: number;
+  last: Anomaly;
+  name: string;
+};
 
 const sameRows = (a: RowSnapshot[], b: RowSnapshot[]) =>
   a.length === b.length &&
@@ -105,6 +117,18 @@ export class AgentStore {
   private _sim = new Map<string, SimState>();
   private _simTouched = new Set<string>();
   private _rows: RowSnapshot[] = [];
+  // `resolved` events for episodes ended outside a tick (agent removed),
+  // delivered at the start of the next tick.
+  private _pendingEvents: StoreEvent[] = [];
+  // Per-agent slow reference of the normal active rate (detector context).
+  private _refRate = new Map<string, number>();
+  // Active time (ms) behind each reference, so a start-up ramp can't set it.
+  private _refActiveMs = new Map<string, number>();
+  // Agents whose caller has reported a status at least once.
+  private _statusReported = new Set<string>();
+  // History the detectors need for the current config.
+  private _detectorHistoryMs = DETECTOR_HISTORY_MS;
+  private _lastTick = 0;
   private _listeners = new Set<() => void>();
 
   constructor(agents: Agent[], options: StoreOptions, now: number) {
@@ -158,7 +182,16 @@ export class AgentStore {
     this.dirty = true;
   }
 
+  /** Queue `resolved` for every open episode of an agent (removal, detection off). */
+  private _closeEpisodes(id: string): StoreEvent[] {
+    const eps = this._episodes.get(id);
+    this._episodes.delete(id);
+    if (!eps) return [];
+    return [...eps.values()].map((ep) => ({ kind: 'resolved', id, name: ep.name, anomaly: ep.last }));
+  }
+
   private _drop(id: string): void {
+    this._pendingEvents.push(...this._closeEpisodes(id));
     this.byId.delete(id);
     this.progress.delete(id);
     this.tokens.delete(id);
@@ -167,8 +200,10 @@ export class AgentStore {
     this.live.delete(id);
     this._health.delete(id);
     this.anomalies.delete(id);
-    this._episodes.delete(id);
     this._locked.delete(id);
+    this._refRate.delete(id);
+    this._refActiveMs.delete(id);
+    this._statusReported.delete(id);
     this._sim.delete(id);
   }
 
@@ -186,10 +221,15 @@ export class AgentStore {
 
   // ── Ingest ─────────────────────────────────────────────────────────────
 
-  /** Samples are kept for 1.5× the visible window. */
+  /**
+   * Samples are kept for 1.5× the visible window, and never less than the
+   * history the detectors need — a display option must not change what the
+   * anomaly detectors can see.
+   */
   retentionMs(): number {
     const winS = this.options.windowSeconds;
-    return (winS !== undefined && winS > 0 ? winS * 1000 : DEFAULT_VIEW_MS) * 1.5;
+    const view = (winS !== undefined && winS > 0 ? winS * 1000 : DEFAULT_VIEW_MS) * 1.5;
+    return Math.max(view, this._detectorHistoryMs);
   }
 
   private _pushSample(rec: AgentRecord, now: number): void {
@@ -237,6 +277,7 @@ export class AgentStore {
       status = undefined;
     }
 
+    if (status !== undefined) this._statusReported.add(id);
     if (status === 'stuck' || status === 'hallucinating') this._locked.add(id);
     else if (status !== undefined) this._locked.delete(id);
 
@@ -275,6 +316,7 @@ export class AgentStore {
       rec.current.progress = step.progress;
       rec.current.confidenceScore = step.confidenceScore;
       this._simTouched.add(rec.id);
+      this._statusReported.add(rec.id);
       if (step.status !== rec.current.status) {
         rec.current.status = step.status;
         this.status.get(rec.id)?.record(now, step.status);
@@ -302,6 +344,16 @@ export class AgentStore {
    * agent's state is updated before its events are emitted.
    */
   healthTick(now: number, detectOn: boolean, cfg: AnomalyConfig, emit: (e: StoreEvent) => void): void {
+    for (const ev of this._pendingEvents.splice(0)) emit(ev);
+    // Keep enough history for the slowest detector rule in this config.
+    this._detectorHistoryMs = Math.max(
+      DETECTOR_HISTORY_MS,
+      2 * cfg.thinkingStallMs + 15_000,
+      2 * cfg.stallDurationMs + 15_000,
+      cfg.spikeBaselineMs + 10_000
+    );
+    const dt = this._lastTick ? Math.max(0, now - this._lastTick) : 0;
+    this._lastTick = now;
     for (const rec of this.list) {
       const tBuf = this.tokens.get(rec.id);
       let found: Anomaly[] = [];
@@ -309,26 +361,61 @@ export class AgentStore {
         const tokens = tBuf.since(now - this.retentionMs());
         const changes =
           this.status.get(rec.id)?.transitionsInRange(now - cfg.thrashWindowMs, now) ?? [];
-        found = detectAnomalies(tokens, changes, rec.current.status, now, cfg);
+        const eps = this._episodes.get(rec.id) ?? new Map<AnomalyKind, Episode>();
+        // Open episodes are passed in so detectors keep the baseline they
+        // opened against and apply hysteresis.
+        const open = new Map([...eps].map(([k, ep]) => [k, { since: ep.since, baseline: ep.baseline }]));
+        // Slow reference of the agent's active rate (time constant ~5 min),
+        // updated from this tick's active output.
+        let sum = 0;
+        let n = 0;
+        for (const s of tBuf.since(now - (dt || 500))) {
+          if (s.v > cfg.stallRateThreshold) {
+            sum += s.v;
+            n++;
+          }
+        }
+        if (n) {
+          this._refActiveMs.set(rec.id, (this._refActiveMs.get(rec.id) ?? 0) + (dt || 500));
+          const prev = this._refRate.get(rec.id);
+          const a = prev === undefined ? 1 : 1 - Math.exp(-(dt || 500) / 300_000);
+          this._refRate.set(rec.id, prev === undefined ? sum / n : prev + (sum / n - prev) * a);
+        }
+        found = detectAnomalies(tokens, changes, rec.current.status, now, cfg, open, {
+          // Only once it reflects real activity, not a start-up ramp.
+          referenceRate: (this._refActiveMs.get(rec.id) ?? 0) >= REFERENCE_WARMUP_MS ? this._refRate.get(rec.id) : undefined,
+          statusReported: this._statusReported.has(rec.id),
+        });
         const prev = this.anomalies.get(rec.id) ?? [];
         if (found.length || prev.length) this.dirty = true;
         this.anomalies.set(rec.id, found);
 
-        // Once per episode (and on escalation), not once per tick.
-        const eps = this._episodes.get(rec.id) ?? new Map<AnomalyKind, Episode>();
+        // Report once when an episode opens (and on escalation), not on every
+        // tick, and once when it ends.
         for (const a of found) {
           const open = eps.get(a.kind);
           const escalated = open?.severity === 'warning' && a.severity === 'critical';
           if (!open || escalated) emit({ kind: 'anomaly', id: rec.id, name: rec.name, anomaly: a });
-          eps.set(a.kind, { severity: a.severity, lastSeen: now });
+          eps.set(a.kind, {
+            since: open?.since ?? now,
+            baseline: open?.baseline ?? a.baseline,
+            severity: open && !escalated ? open.severity : a.severity,
+            lastSeen: now,
+            last: a,
+            name: rec.name,
+          });
         }
         for (const [kind, ep] of Array.from(eps)) {
-          if (now - ep.lastSeen > EPISODE_GRACE_MS) eps.delete(kind);
+          if (now - ep.lastSeen >= EPISODE_GRACE_MS) {
+            eps.delete(kind);
+            emit({ kind: 'resolved', id: rec.id, name: rec.name, anomaly: ep.last });
+          }
         }
         this._episodes.set(rec.id, eps);
-      } else if (this.anomalies.has(rec.id)) {
+      } else if (this.anomalies.has(rec.id) || this._episodes.has(rec.id)) {
+        // Detection switched off: open episodes end now.
+        for (const ev of this._closeEpisodes(rec.id)) emit(ev);
         this.anomalies.delete(rec.id);
-        this._episodes.delete(rec.id);
         this.dirty = true;
       }
 
