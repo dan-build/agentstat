@@ -138,6 +138,8 @@ export class AgentStore {
   readonly status = new Map<string, StatusLog>();
   readonly live = new Map<string, LiveValues>();
   readonly anomalies = new Map<string, Anomaly[]>();
+  /** Agents that have reported progress (otherwise it's unknown, not 0%). */
+  readonly progressKnown = new Set<string>();
   /** Sticky token-axis ceiling, recomputed at most 4×/s by the view. */
   readonly axis = { bucket: -1, value: 0 };
   /** Set by any write that changes what's drawn; cleared by the renderer. */
@@ -240,6 +242,8 @@ export class AgentStore {
     this.status.set(a.id, series.status);
     this._statusSince.set(a.id, now);
     this._workSince.set(a.id, now);
+    // A starting value in the prop counts; createAgent's 0 doesn't.
+    if (rec.current.progress > 0) this.progressKnown.add(a.id);
     return rec;
   }
 
@@ -344,6 +348,7 @@ export class AgentStore {
     this._statusSince.delete(id);
     this._workSince.delete(id);
     this._sourced.delete(id);
+    this.progressKnown.delete(id);
     this._streams.delete(id);
     this._sim.delete(id);
   }
@@ -443,7 +448,10 @@ export class AgentStore {
 
     const cur = rec.current;
     if (tokensRate !== undefined) cur.tokensRate = tokensRate;
-    if (progress !== undefined) cur.progress = progress;
+    if (progress !== undefined) {
+      cur.progress = progress;
+      this.progressKnown.add(id);
+    }
     if (confidenceScore !== undefined) cur.confidenceScore = confidenceScore;
     if (errorCount !== undefined) cur.errorCount = errorCount;
     if (latencyMs !== undefined) {
@@ -648,6 +656,7 @@ export class AgentStore {
       this._sim.set(rec.id, step.state);
       rec.current.tokensRate = step.tokensRate;
       rec.current.progress = step.progress;
+      this.progressKnown.add(rec.id);
       rec.current.confidenceScore = step.confidenceScore;
       this._simTouched.add(rec.id);
       this._setStatus(rec, step.status, now, step.tokensRate > this._idleRate);

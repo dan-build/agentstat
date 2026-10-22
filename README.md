@@ -228,8 +228,11 @@ More integrations — LangChain, WebSocket/SSE, MCP — are in the
 
 ## What you see
 
-- **Lines over time** for progress (`metric="progress"`, the default), token rate
-  (`"tokens"`), or both on two axes (`"both"`). Time is labelled relative to now.
+- **Lines over time** for progress (`metric="progress"`), token rate
+  (`"tokens"`), or both on two axes (`"both"`). The default, `"auto"`, plots
+  progress once an agent reports it and token rate otherwise: progress an
+  agent never reported is unknown, not 0%, so it has no line (and shows as
+  "–" when inspected). Time is labelled relative to now.
 - **A live tip** at the right edge for agents that are reporting. An agent that
   stops reporting keeps its line where its data ends; nothing is extrapolated.
 - **A legend** to show or hide agents. It stays on one row; agents that don't
@@ -327,7 +330,7 @@ const found = detectAnomalies(tokenSamples, statusChanges, 'active', performance
 |------|------|---------|---|
 | `agents` | `Agent[]` | `[]` | The roster. |
 | `height` | `number \| string` | `520` | Any CSS length. Width is always 100%. |
-| `metric` | `'progress' \| 'tokens' \| 'both'` | `'progress'` | Which series to plot. |
+| `metric` | `'auto' \| 'progress' \| 'tokens' \| 'both'` | `'auto'` | Which series to plot; `'auto'` = progress once reported, else token rate. |
 | `windowSeconds` | `number` | — | Wall-clock window. Unset: last 10 s of data. |
 | `theme` | `'light' \| 'dark' \| 'system'` | inferred | Unset: dark if `styles.background` is dark. |
 | `styles` | `{ background, borderColor, textColor, gridColor }` | — | Any CSS color, including `var(--token)`. |

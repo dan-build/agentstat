@@ -6,6 +6,13 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
 
 ### Added
 
+- **Progress is unknown until reported.** The new default `metric="auto"`
+  plots progress once a visible agent reports it, and token rate until then
+  — event-driven agents no longer show a flat 0% line. With `"progress"` or
+  `"both"`, an agent that hasn't reported progress has no line, and the
+  tooltip shows "–". A starting value above 0 in the `agents` prop counts as
+  reported; `createAgent`'s 0 doesn't. `ChartMetric` gains `'auto'`.
+
 - **`createAgentStream()` / `useAgentStream()` and `<AgentStat source>`.**
   Push agent events into a stream from anywhere, before or after a chart
   mounts; the chart subscribes, replays the stream's last 5 minutes at their

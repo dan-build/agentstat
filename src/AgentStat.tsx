@@ -119,7 +119,10 @@ export interface AgentStatProps {
    * update rates. Default 100 000.
    */
   maxHistoryPoints?: number;
-  /** Which series to plot. Default 'progress'. */
+  /**
+   * Which series to plot. Default 'auto': progress once an agent reports it,
+   * otherwise the token rate.
+   */
   metric?: ChartMetric;
   /**
    * Fixed upper bound for the token-rate axis. By default the axis
@@ -268,7 +271,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
     ariaLabel,
     panel = 'auto',
     maxHistoryPoints = DEFAULT_CAP,
-    metric = 'progress',
+    metric = 'auto',
     tokenAxisMax,
     windowSeconds,
     smoothing = 0,
@@ -305,7 +308,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
   // Reused every frame; its changing fields are refreshed before each draw.
   const [drawCtx] = useState<DrawContext>(() => ({
     store,
-    opts: { metric: 'progress', smoothing: 0, anomalyDetection: false },
+    opts: { metric: 'auto', smoothing: 0, anomalyDetection: false },
     theme: { mode: 'light', t: tokensFor('light') },
     colors,
     gradients,
@@ -696,6 +699,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
       name: rec.name,
       color: rec.color ?? palette[idx % palette.length],
       point,
+      progressKnown: store.progressKnown.has(rec.id),
       x: clamp(view.xOf(p.t), 90, view.cssW - 90),
       y: view.primaryToY(p.v),
     });

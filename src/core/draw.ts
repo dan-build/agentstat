@@ -70,7 +70,7 @@ export function drawFrame(
   const view = computeView(store, L, now, cssW, cssH);
   const { w, h, xOf, primaryToY, tokenToY, progressToY, safeTokenMax } = view;
   if (w < 16 || h < 16) return null;
-  const metric = L.metric;
+  const metric = view.metric;
   const showProgress = metric !== 'tokens';
   const colorOf = (rec: (typeof store.list)[number], index: number) => colors.resolve(rec, index, mode, tk);
 

@@ -24,6 +24,8 @@ export type View = {
   windowed: boolean;
   drawTarget: number;
   recomputeMs: number;
+  /** The metric drawn ('auto' resolved). */
+  metric: Exclude<ChartMetric, 'auto'>;
   primaryIsTokens: boolean;
   safeTokenMax: number;
   xOf: (t: number) => number;
@@ -49,7 +51,14 @@ export function computeView(
   const h = Math.max(1, cssH - PAD.top - PAD.bottom);
   const viewNow = store.pausedAt ?? now;
   const winMs = opts.windowSeconds !== undefined && opts.windowSeconds > 0 ? opts.windowSeconds * 1000 : undefined;
-  const primaryIsTokens = opts.metric === 'tokens';
+  // 'auto': progress once any visible agent reports it, else token rate.
+  const metric: Exclude<ChartMetric, 'auto'> =
+    opts.metric !== 'auto'
+      ? opts.metric
+      : store.list.some((r) => r.visible && store.progressKnown.has(r.id))
+        ? 'progress'
+        : 'tokens';
+  const primaryIsTokens = metric === 'tokens';
   const primaryMap = primaryIsTokens ? store.tokens : store.progress;
 
   let tEnd: number;
@@ -85,7 +94,7 @@ export function computeView(
 
   // Token axis: sticky ceiling, recomputed at most 4×/s.
   let safeTokenMax = 100;
-  if (opts.metric !== 'progress') {
+  if (metric !== 'progress') {
     let tokenMax = opts.tokenAxisMax;
     if (tokenMax === undefined || !(tokenMax > 0)) {
       const cache = store.axis;
@@ -130,6 +139,7 @@ export function computeView(
     windowed: winMs !== undefined,
     drawTarget,
     recomputeMs,
+    metric,
     primaryIsTokens,
     safeTokenMax,
     xOf: (t: number) => PAD.left + clamp((t - tStart) / span, 0, 1) * w,
@@ -147,7 +157,11 @@ export function pointsFor(buf: TimeSeriesBuffer, view: View): TSPoint[] {
   return end === pts.length ? pts : pts.slice(0, end);
 }
 
-/** The buffer for the metric on the primary (left) axis. */
+/**
+ * The buffer for the metric on the primary (left) axis; none for progress an
+ * agent never reported (unknown is not 0%).
+ */
 export function primaryBuffer(store: AgentStore, id: string, view: View): TimeSeriesBuffer | undefined {
+  if (!view.primaryIsTokens && !store.progressKnown.has(id)) return undefined;
   return (view.primaryIsTokens ? store.tokens : store.progress).get(id);
 }
