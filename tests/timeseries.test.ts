@@ -76,10 +76,22 @@ describe('TimeSeriesBuffer — windowed slicing', () => {
     for (let t = 0; t < 5000; t++) b.push(t, Math.sin(t / 50));
     const r = b.windowed(4999, undefined, 200);
     expect(r.downsampled).toBe(true);
-    expect(r.points.length).toBe(200);
+    // M4 over 100 columns: at most 4 points per column, usually ~2.
+    expect(r.points.length).toBeLessThanOrEqual(400);
+    expect(r.points.length).toBeLessThan(5000);
     // endpoints preserved
     expect(r.points[0].t).toBe(0);
     expect(r.points[r.points.length - 1].t).toBe(4999);
+  });
+
+  it('never drops the extremes of a downsampled slice', () => {
+    const b = new TimeSeriesBuffer();
+    for (let t = 0; t < 5000; t++) b.push(t, Math.sin(t / 50) + (t === 1234 ? 40 : 0) - (t === 3210 ? 40 : 0));
+    const pts = b.windowed(4999, undefined, 200).points;
+    expect(pts.some((p) => p.t === 1234)).toBe(true);
+    expect(pts.some((p) => p.t === 3210)).toBe(true);
+    // Sorted and drawn from the input.
+    for (let i = 1; i < pts.length; i++) expect(pts[i].t).toBeGreaterThan(pts[i - 1].t);
   });
 
   it('caches the result for identical inputs', () => {

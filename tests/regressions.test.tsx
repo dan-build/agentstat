@@ -59,8 +59,8 @@ describe('time-series buffer', () => {
       buf.evictOlderThan(i, 100);
     }
     expect(buf.length).toBeLessThanOrEqual(101);
-    // Internal storage stays proportional to live samples.
-    expect((buf as unknown as { _buf: unknown[] })._buf.length).toBeLessThan(2200);
+    // Storage shrinks back toward the live window instead of the peak.
+    expect((buf as unknown as { _t: Float64Array })._t.length).toBeLessThanOrEqual(512);
   });
 });
 
