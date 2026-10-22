@@ -10,6 +10,7 @@ import { mulberry32, type Rng } from '../../src/simulator';
 import { DEFAULT_ANOMALY_CONFIG } from '../../src/anomaly';
 import type { AgentSample, AgentStatus } from '../../src/types';
 import { gauss, runScenario, TOLERANCE_MS, type Scenario, type ScenarioResult } from './harness';
+import { ADVERSARIAL } from './adversarial';
 
 export { DEFAULT_ANOMALY_CONFIG, TOLERANCE_MS };
 
@@ -176,5 +177,8 @@ export const SCENARIOS: Scenario[] = [
 ];
 
 export function runAll(): ScenarioResult[] {
-  return SCENARIOS.map(runScenario);
+  return [
+    ...SCENARIOS.map((sc) => runScenario(sc, 'original')),
+    ...ADVERSARIAL.map((sc) => runScenario(sc, 'adversarial')),
+  ];
 }

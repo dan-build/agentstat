@@ -32,9 +32,9 @@ describe('meanStd', () => {
 
 describe('detectStall', () => {
   it('flags a sustained idle stretch while active', () => {
-    // 60 samples at 0 t/s spanning 6s, status active → stall.
-    const tokens = series(new Array(60).fill(0), 10_000, 100);
-    const a = detectStall(tokens, 'active', 10_000, cfg);
+    // 12 s at 0 t/s (over the 10 s active limit), status active → stall.
+    const tokens = series(new Array(120).fill(0), 12_000, 100);
+    const a = detectStall(tokens, 'active', 12_000, cfg);
     expect(a).not.toBeNull();
     expect(a!.kind).toBe('stall');
     expect(a!.message).toMatch(/stalled/);
@@ -60,8 +60,8 @@ describe('detectStall', () => {
   });
 
   it('escalates to critical for a very long stall', () => {
-    const tokens = series(new Array(150).fill(0), 20_000, 100); // 15s idle
-    const a = detectStall(tokens, 'active', 20_000, cfg);
+    const tokens = series(new Array(250).fill(0), 30_000, 100); // 25s idle
+    const a = detectStall(tokens, 'active', 30_000, cfg);
     expect(a!.severity).toBe('critical');
   });
 
@@ -142,7 +142,7 @@ describe('detectAnomalies — integration', () => {
 
   it('can surface multiple distinct anomalies at once', () => {
     // Idle stretch (stall) + rapid status changes (thrash).
-    const tokens = series(new Array(80).fill(0), 10_000, 100);
+    const tokens = series(new Array(120).fill(0), 10_000, 100);
     const statusChanges: StatusChange[] = [
       { t: 7000, status: 'active' },
       { t: 7500, status: 'stuck' },
@@ -159,9 +159,9 @@ describe('detectAnomalies — integration', () => {
 
 describe('detectors know what normal looks like', () => {
   it('allows a thinking agent to be quiet much longer than an active one', () => {
-    const tokens = series(new Array(100).fill(0), 10_000, 100); // 10s idle
-    expect(detectStall(tokens, 'active', 10_000, cfg)?.kind).toBe('stall');
-    expect(detectStall(tokens, 'thinking', 10_000, cfg)).toBeNull();
+    const tokens = series(new Array(120).fill(0), 12_000, 100); // 12s idle
+    expect(detectStall(tokens, 'active', 12_000, cfg)?.kind).toBe('stall');
+    expect(detectStall(tokens, 'thinking', 12_000, cfg)).toBeNull();
     const long = series(new Array(320).fill(0), 40_000, 100); // 32s idle
     expect(detectStall(long, 'thinking', 40_000, cfg)?.message).toMatch(/while thinking/);
   });
@@ -178,7 +178,7 @@ describe('detectors know what normal looks like', () => {
     vals.push(70);
     const a = detectSpike(series(vals, 40_000, 100), cfg);
     expect(a?.kind).toBe('spike');
-    expect(a?.message).toMatch(/× recent high ~12\/s/);
+    expect(a?.message).toMatch(/× the usual peak of ~12\/s/);
   });
 
   it('looks at the whole last second, not just the latest sample', () => {
@@ -187,12 +187,44 @@ describe('detectors know what normal looks like', () => {
   });
 
   it('keeps an open spike open on weaker evidence (hysteresis)', () => {
-    // Recent high 12; a peak of 15 (1.25×) is too small to open a spike but
-    // enough to keep an open one open.
-    const vals = [...Array.from({ length: 200 }, (_, i) => 10 + (i % 3)), 15];
-    const tokens = series(vals, 20_000, 100);
-    expect(detectSpike(tokens, cfg, 20_000, false)).toBeNull();
-    expect(detectSpike(tokens, cfg, 20_000, true)).not.toBeNull();
+    // Steady 10 t/s, then a second at 13 t/s (1.3×): too small to open a
+    // spike, enough to keep one open against the baseline it opened with.
+    const vals = [...new Array(300).fill(10), ...new Array(10).fill(13)];
+    const tokens = series(vals, 31_000, 100);
+    expect(detectSpike(tokens, cfg, 31_000)).toBeNull();
+    expect(detectSpike(tokens, cfg, 31_000, { since: 29_000, baseline: 10 })).not.toBeNull();
+    // …and closes once output is back under 1.2× that baseline.
+    const calm = series([...new Array(300).fill(10), ...new Array(10).fill(11)], 31_000, 100);
+    expect(detectSpike(calm, cfg, 31_000, { since: 29_000, baseline: 10 })).toBeNull();
+  });
+
+  it('keeps a sustained runaway open against the baseline it opened with', () => {
+    // 60 s of runaway output: without the remembered baseline it would become
+    // its own normal within seconds.
+    const vals = [...new Array(300).fill(20), ...new Array(600).fill(100)];
+    const tokens = series(vals, 90_000, 100);
+    expect(detectSpike(tokens, cfg, 90_000, { since: 30_000, baseline: 22 })?.kind).toBe('spike');
+  });
+
+  it('accepts a new level after spikeMaxEpisodeMs', () => {
+    const vals = [...new Array(300).fill(20), ...new Array(600).fill(100)];
+    const tokens = series(vals, 90_000, 100);
+    expect(detectSpike(tokens, { ...cfg, spikeMaxEpisodeMs: 30_000 }, 90_000, { since: 30_000, baseline: 22 })).toBeNull();
+  });
+
+  it('never calls resuming after a long pause a spike', () => {
+    // 35 s thinking (0 t/s), then normal output.
+    const vals = [...new Array(350).fill(0), ...new Array(20).fill(30)];
+    for (let k = 5; k <= 20; k++) {
+      const tokens = series(vals.slice(0, 350 + k), 35_000 + k * 100, 100);
+      expect(detectSpike(tokens, cfg)).toBeNull();
+    }
+  });
+
+  it('catches a slow, sustained climb', () => {
+    // Rate doubles every ~20 s.
+    const vals = Array.from({ length: 600 }, (_, i) => 10 * Math.pow(2, i / 200));
+    expect(detectSpike(series(vals, 60_000, 100), cfg)?.message).toMatch(/climbing/);
   });
 
   it('stays quiet for a bursty but healthy agent', () => {
@@ -202,8 +234,8 @@ describe('detectors know what normal looks like', () => {
   });
 
   it('waits for enough history before judging spikes', () => {
-    // 5 s of history (< a third of the 30 s baseline window) then a burst.
-    const vals = [...new Array(50).fill(10), 80];
+    // 2 s of history (under the 3 s warm-up) then a burst.
+    const vals = [...new Array(20).fill(10), 80];
     expect(detectSpike(series(vals, 10_000, 100), cfg)).toBeNull();
   });
 
@@ -218,5 +250,6 @@ describe('detectors know what normal looks like', () => {
       status: i % 2 ? 'stuck' : 'active',
     }));
     expect(detectThrash(flapping, 9000, cfg)?.kind).toBe('thrash');
+    expect(detectThrash(flapping, 9000, cfg)?.message).toMatch(/active↔stuck/);
   });
 });

@@ -135,8 +135,9 @@ export interface AgentStatProps {
    */
   onAnomaly?: (agentId: string, anomaly: Anomaly) => void;
   /**
-   * Called once when an anomaly that was reported has cleared (2 s after the
-   * detector last saw it), with the last reading of it.
+   * Called once when an anomaly that was reported has ended (5 s after the
+   * detector last saw it, when detection is switched off, or when the agent is
+   * removed), with the last reading of it.
    */
   onAnomalyEnd?: (agentId: string, anomaly: Anomaly) => void;
 }

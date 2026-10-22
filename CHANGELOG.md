@@ -30,24 +30,34 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
   peak could be drawn past its true value (progress above 100%), and a fall to
   zero could dip below the axis.
 
-- **Anomaly detection rebuilt to stop crying wolf.** On a labelled set of 14
-  realistic scenarios (`npm run eval:detectors`), precision went from 38.7% to
-  100% and recall from 86% to 100%, with false alarms falling from 36.6 to 0
-  per agent-hour:
-  - **Stall:** a `thinking` agent may be quiet for 30 s (`thinkingStallMs`),
-    since reasoning models emit nothing while they think. The 5 s limit
-    applies while `active`.
-  - **Spike:** the last second's peak is compared with the agent's recent
-    high (95th percentile over 30 s, `spikeBaselineMs`), so bursty but healthy
-    output, resuming after a pause, and start-up ramps no longer alert. Bursts
-    between detection ticks are caught. **Breaking:** `spikeZScore` is
-    replaced by `spikeRatio` (default 1.5) and `spikeMinIncrease` (3 t/s).
-  - **Thrash:** alternating between normal working states (`active` ↔
-    `thinking`, set by `thrashBenignStatuses`) no longer counts.
-  - **Episodes:** an open alert stays open on weaker evidence (hysteresis),
-    an escalated alert can't flicker back and fire again, and the new
-    **`onAnomalyEnd`** callback (plus a screen-reader announcement) reports
-    when a problem clears.
+- **Anomaly detection rebuilt to stop crying wolf**, and measured. A labelled
+  evaluation (`npm run eval:detectors`) replays 30 scenarios through the real
+  store: 14 written with the change, and 16 written by an independent reviewer
+  to find blind spots. Combined, precision went from 28% to 100%, recall from
+  73% to 100%, and false alarms from 43.6 to 0 per agent-hour, with no alert
+  closing while its problem was still going on.
+  - **Stall:** "no output" is judged relative to the agent (an average below
+    5% of its recent high), so a trickle or heartbeat can't hide a stall. The
+    limit while `active` is now 10 s (tool calls often pause output for
+    several seconds); while `thinking`, 30 s (`thinkingStallMs`).
+  - **Spike:** compared with the agent's usual peak (95th percentile of its
+    active output over 30 s), so bursty but healthy output, resuming after any
+    pause and start-up ramps don't alert. Catches sustained runaways (the last
+    second's average), isolated bursts (one sample ≥ 4×) and slow climbs (rate
+    still rising over 30 s). An open spike keeps the baseline it opened
+    against, so a long runaway can't become its own normal; after 2 minutes
+    (`spikeMaxEpisodeMs`) the new level is accepted. Works with sparse or
+    batched telemetry. **Breaking:** `spikeZScore` is replaced by `spikeRatio`
+    (1.5) and `spikeMinIncrease` (3 t/s).
+  - **Thrash:** moving between normal working states (`active`, `thinking`,
+    `complete`, set by `thrashBenignStatuses`) doesn't count; messages name the
+    statuses involved.
+  - **Episodes:** an alert ends after 5 s without its condition (so a retry
+    loop stays one episode), can't flicker between warning and critical, and
+    reports its end through the new **`onAnomalyEnd`** callback and a
+    screen-reader announcement — also when detection is switched off or the
+    agent is removed. Spike anomalies carry the `baseline` they were compared
+    with.
   - **Detector history** no longer depends on the visible window: the store
     keeps at least 40 s of samples.
 

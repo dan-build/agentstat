@@ -374,7 +374,7 @@ describe('anomaly episodes', () => {
     }
     expect(onAnomaly.mock.calls.some(([, a]) => a.kind === 'stall')).toBe(true);
     expect(onAnomalyEnd).not.toHaveBeenCalled();
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 80; i++) {
       act(() => ref.current?.updateAgent('e', 15, 2, 'active'));
       await tick(100);
     }

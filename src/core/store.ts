@@ -65,7 +65,14 @@ export interface StoreOptions {
   maxHistoryPoints: number;
 }
 
-type Episode = { severity: AnomalySeverity; lastSeen: number; last: Anomaly };
+type Episode = {
+  since: number;
+  baseline?: number;
+  severity: AnomalySeverity;
+  lastSeen: number;
+  last: Anomaly;
+  name: string;
+};
 
 const sameRows = (a: RowSnapshot[], b: RowSnapshot[]) =>
   a.length === b.length &&
@@ -107,6 +114,9 @@ export class AgentStore {
   private _sim = new Map<string, SimState>();
   private _simTouched = new Set<string>();
   private _rows: RowSnapshot[] = [];
+  // `resolved` events for episodes ended outside a tick (agent removed),
+  // delivered at the start of the next tick.
+  private _pendingEvents: StoreEvent[] = [];
   private _listeners = new Set<() => void>();
 
   constructor(agents: Agent[], options: StoreOptions, now: number) {
@@ -160,7 +170,16 @@ export class AgentStore {
     this.dirty = true;
   }
 
+  /** Queue `resolved` for every open episode of an agent (removal, detection off). */
+  private _closeEpisodes(id: string): StoreEvent[] {
+    const eps = this._episodes.get(id);
+    this._episodes.delete(id);
+    if (!eps) return [];
+    return [...eps.values()].map((ep) => ({ kind: 'resolved', id, name: ep.name, anomaly: ep.last }));
+  }
+
   private _drop(id: string): void {
+    this._pendingEvents.push(...this._closeEpisodes(id));
     this.byId.delete(id);
     this.progress.delete(id);
     this.tokens.delete(id);
@@ -169,7 +188,6 @@ export class AgentStore {
     this.live.delete(id);
     this._health.delete(id);
     this.anomalies.delete(id);
-    this._episodes.delete(id);
     this._locked.delete(id);
     this._sim.delete(id);
   }
@@ -309,6 +327,7 @@ export class AgentStore {
    * agent's state is updated before its events are emitted.
    */
   healthTick(now: number, detectOn: boolean, cfg: AnomalyConfig, emit: (e: StoreEvent) => void): void {
+    for (const ev of this._pendingEvents.splice(0)) emit(ev);
     for (const rec of this.list) {
       const tBuf = this.tokens.get(rec.id);
       let found: Anomaly[] = [];
@@ -317,8 +336,10 @@ export class AgentStore {
         const changes =
           this.status.get(rec.id)?.transitionsInRange(now - cfg.thrashWindowMs, now) ?? [];
         const eps = this._episodes.get(rec.id) ?? new Map<AnomalyKind, Episode>();
-        // Open episodes are passed in so detectors can apply hysteresis.
-        found = detectAnomalies(tokens, changes, rec.current.status, now, cfg, new Set(eps.keys()));
+        // Open episodes are passed in so detectors keep the baseline they
+        // opened against and apply hysteresis.
+        const open = new Map([...eps].map(([k, ep]) => [k, { since: ep.since, baseline: ep.baseline }]));
+        found = detectAnomalies(tokens, changes, rec.current.status, now, cfg, open);
         const prev = this.anomalies.get(rec.id) ?? [];
         if (found.length || prev.length) this.dirty = true;
         this.anomalies.set(rec.id, found);
@@ -330,21 +351,25 @@ export class AgentStore {
           const escalated = open?.severity === 'warning' && a.severity === 'critical';
           if (!open || escalated) emit({ kind: 'anomaly', id: rec.id, name: rec.name, anomaly: a });
           eps.set(a.kind, {
+            since: open?.since ?? now,
+            baseline: open?.baseline ?? a.baseline,
             severity: open && !escalated ? open.severity : a.severity,
             lastSeen: now,
             last: a,
+            name: rec.name,
           });
         }
         for (const [kind, ep] of Array.from(eps)) {
-          if (now - ep.lastSeen > EPISODE_GRACE_MS) {
+          if (now - ep.lastSeen >= EPISODE_GRACE_MS) {
             eps.delete(kind);
             emit({ kind: 'resolved', id: rec.id, name: rec.name, anomaly: ep.last });
           }
         }
         this._episodes.set(rec.id, eps);
-      } else if (this.anomalies.has(rec.id)) {
+      } else if (this.anomalies.has(rec.id) || this._episodes.has(rec.id)) {
+        // Detection switched off: open episodes end now.
+        for (const ev of this._closeEpisodes(rec.id)) emit(ev);
         this.anomalies.delete(rec.id);
-        this._episodes.delete(rec.id);
         this.dirty = true;
       }
 

@@ -32,6 +32,8 @@ export interface Scenario {
   durationS: number;
   /** Sample period (ms). Default 100 (10 Hz). */
   periodMs?: number;
+  /** Samples delivered per period at the same timestamp (batched transport). Default 1. */
+  batch?: number;
   cfg?: Partial<AnomalyConfig>;
   labels: Label[];
   /** Called every period per agent; return null to send nothing (dropped stream). */
@@ -60,6 +62,13 @@ export interface LabelResult extends Label {
 
 export interface ScenarioResult {
   name: string;
+  /** Which scenario set it belongs to. */
+  set: string;
+  /**
+   * Episodes reported resolved while their (required) label was still
+   * ongoing for at least another second: alerts that close too early.
+   */
+  prematureResolves: number;
   agents: number;
   durationS: number;
   alerts: Alert[];
@@ -82,7 +91,7 @@ export const median = (xs: number[]): number | null => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 
-export function runScenario(sc: Scenario): ScenarioResult {
+export function runScenario(sc: Scenario, set = 'default'): ScenarioResult {
   const n = sc.agents ?? 1;
   const period = sc.periodMs ?? 100;
   const cfg: AnomalyConfig = { ...DEFAULT_ANOMALY_CONFIG, ...sc.cfg };
@@ -94,18 +103,25 @@ export function runScenario(sc: Scenario): ScenarioResult {
   }));
   const store = new AgentStore(agents, { maxHistoryPoints: 100_000 }, T0);
   const alerts: Alert[] = [];
+  const resolved: { agent: number; kind: AnomalyKind; t: number }[] = [];
   const endMs = sc.durationS * 1000;
   // Integer-ms clock; samples and ticks that coincide are applied ingest-first.
   for (let ms = 0; ms <= endMs; ms++) {
     const now = T0 + ms;
     if (ms % period === 0) {
       for (let i = 0; i < n; i++) {
-        const s = sc.step(ms / 1000, i, rng);
-        if (s) store.ingest(`a${i}`, s, now);
+        for (let b = 0; b < (sc.batch ?? 1); b++) {
+          const s = sc.step(ms / 1000, i, rng);
+          if (s) store.ingest(`a${i}`, s, now);
+        }
       }
     }
     if (ms % HEALTH_TICK_MS === 0 && ms > 0) {
       store.healthTick(now, true, cfg, (e) => {
+        if (e.kind === 'resolved') {
+          resolved.push({ agent: Number(e.id.slice(1)), kind: e.anomaly.kind, t: ms / 1000 });
+          return;
+        }
         if (e.kind !== 'anomaly') return;
         alerts.push({
           agent: Number(e.id.slice(1)),
@@ -119,10 +135,16 @@ export function runScenario(sc: Scenario): ScenarioResult {
       });
     }
   }
-  return score(sc, n, alerts);
+  return score(sc, n, alerts, resolved, set);
 }
 
-function score(sc: Scenario, n: number, alerts: Alert[]): ScenarioResult {
+function score(
+  sc: Scenario,
+  n: number,
+  alerts: Alert[],
+  resolved: { agent: number; kind: AnomalyKind; t: number }[],
+  set: string
+): ScenarioResult {
   // Expand agent-less labels to one per agent.
   const labels: LabelResult[] = [];
   for (const l of sc.labels) {
@@ -160,9 +182,14 @@ function score(sc: Scenario, n: number, alerts: Alert[]): ScenarioResult {
   }
   const req = labels.filter((l) => !l.optional);
   const tp = req.filter((l) => l.hit).length;
+  const prematureResolves = resolved.filter((r) =>
+    req.some((l) => l.agentIdx === r.agent && l.kind === r.kind && r.t >= l.start && r.t < l.end - 1)
+  ).length;
   const latencies = req.flatMap((l) => (l.latencyS === null ? [] : [l.latencyS]));
   return {
     name: sc.name,
+    set,
+    prematureResolves,
     agents: n,
     durationS: sc.durationS,
     alerts,

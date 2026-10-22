@@ -18,9 +18,9 @@ export const HEALTH_WINDOW_MS = 5_000;
 export const LATENCY_HISTORY = 20;
 export const DEFAULT_CAP = 100_000;
 export const MAX_PANEL_ROWS = 6;
-// Episodes stay open briefly after the detector stops reporting them, so a
-// detector that flickers at its threshold doesn't fire onAnomaly repeatedly.
-export const EPISODE_GRACE_MS = 2_000;
+// An episode ends after the detector hasn't reported it for this long, so a
+// flickering signal or a periodic problem (a retry loop) stays one episode.
+export const EPISODE_GRACE_MS = 5_000;
 export const HIT_RADIUS = 32;
 export const TIME_STEPS_S = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
 
