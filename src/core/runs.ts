@@ -36,9 +36,10 @@ export interface RunMapperOptions {
   report?: (err: unknown) => void;
   /**
    * Tools may run unreported (the app runs them): an agent whose model call
-   * asked for tools is `waiting` until its next call, not handing over.
+   * asked for tools is `waiting` until its next call, not handing over —
+   * or, if nothing follows within this many ms, it's done. 0 = off.
    */
-  toolsOutside?: boolean;
+  toolsOutsideMs?: number;
 }
 
 type Kind = 'model' | 'tool' | 'chain';
@@ -54,7 +55,7 @@ type Run = { kind: Kind; root: string; agent?: string; name: string; streamed: b
  * arrival.
  */
 export function createRunMapper(sink: EventSink, options: RunMapperOptions) {
-  const { pick, count, implicitRoot, report, toolsOutside } = options;
+  const { pick, count, implicitRoot, report, toolsOutsideMs = 0 } = options;
   const runs = new Map<string, Run>();
   // Open model/tool runs per agent; agents not finished; agents per root.
   const open = new Map<string, number>();
@@ -64,13 +65,28 @@ export function createRunMapper(sink: EventSink, options: RunMapperOptions) {
   const handover = new Map<string, string>();
   // Agents that reported an error since their last start.
   const failed = new Set<string>();
-  // Agents waiting on tools that run unreported (toolsOutside).
-  const outside = new Set<string>();
+  // Agents waiting on tools that run unreported: their root, and the timer
+  // that ends the wait if nothing follows.
+  const outside = new Map<string, { root: string; timer: ReturnType<typeof setTimeout> }>();
   let current: string | undefined;
 
   const emit = (id: string, e: AgentEvent, t?: number) => {
-    // Whatever the agent does next ends its wait on unreported tools.
-    if (outside.delete(id)) emit(id, { type: 'tool-end', name: 'tools' }, t);
+    // Whatever the agent does next ends its wait on unreported tools (a real
+    // tool call opens first, so the wait doesn't flicker).
+    const waited = outside.get(id);
+    if (waited) {
+      outside.delete(id);
+      clearTimeout(waited.timer);
+      if (e.type === 'tool-start') {
+        send(id, e, t);
+        return send(id, { type: 'tool-end', name: 'tools' }, t);
+      }
+      send(id, { type: 'tool-end', name: 'tools' }, t);
+    }
+    send(id, e, t);
+  };
+
+  const send = (id: string, e: AgentEvent, t?: number) => {
     if (e.type === 'finish') busy.delete(id);
     else busy.add(id);
     if (e.type === 'error') failed.add(id);
@@ -110,6 +126,11 @@ export function createRunMapper(sink: EventSink, options: RunMapperOptions) {
           handover.delete(other);
           if (!open.has(other)) emit(other, { type: 'finish' }, t);
         }
+      }
+      // Likewise an agent waiting on unreported tools: another agent's new
+      // turn means it handed off.
+      for (const [other, w] of Array.from(outside)) {
+        if (other !== agent && fresh && w.root === root && !open.has(other)) emit(other, { type: 'finish' }, t);
       }
     }
     if (agent) {
@@ -192,9 +213,14 @@ export function createRunMapper(sink: EventSink, options: RunMapperOptions) {
         // Asked for tools (or structured output): hand over to what's next
         // — or, when tools run unreported, wait on them.
         if (!error && out?.callsTools) {
-          if (toolsOutside) {
+          if (toolsOutsideMs > 0) {
             emit(idle, { type: 'tool-start', name: 'tools' }, t);
-            outside.add(idle);
+            const timer = setTimeout(() => {
+              if (outside.has(idle) && !open.has(idle)) emit(idle, { type: 'finish' });
+            }, toolsOutsideMs);
+            // A timer mustn't keep a server or script alive.
+            (timer as { unref?: () => void }).unref?.();
+            outside.set(idle, { root: r.root, timer });
             // A call that is its own root: the app runs the tools and calls
             // again; the agent waits until then (or shutdown).
             if (r.root === runId) return void byRoot.delete(runId);
@@ -228,7 +254,7 @@ export function createRunMapper(sink: EventSink, options: RunMapperOptions) {
     endAll(error: boolean) {
       // Roots with agents need ending; the rest only need forgetting.
       for (const root of Array.from(byRoot.keys())) endRoot(root, error);
-      for (const agent of Array.from(outside)) emit(agent, { type: 'finish' });
+      for (const agent of Array.from(outside.keys())) emit(agent, { type: 'finish' });
       runs.clear();
       handover.clear();
       current = undefined;

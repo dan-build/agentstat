@@ -526,12 +526,13 @@ export class AgentStore {
         }
         if (n === 0) break;
         const since = typeof e.since === 'number' && Number.isFinite(e.since) ? Math.min(e.since, t) : undefined;
-        if (since !== undefined && t - since >= SAMPLE_MS) {
+        if (since !== undefined) {
           // Output produced over [since, t], reported as one block (a call
           // reported when it ended): one sample at its average rate. `since`
-          // after the request is its first output: that's the TTFT.
-          if (s.ttftFrom !== null && since > s.ttftFrom) {
-            s.ttft = since - s.ttftFrom;
+          // after the request is when output began: the TTFT; at the request
+          // itself (nothing known earlier), the whole call is.
+          if (s.ttftFrom !== null) {
+            s.ttft = (since > s.ttftFrom ? since : t) - s.ttftFrom;
             this.ingest(id, { latencyMs: s.ttft }, now);
           }
           s.ttftFrom = null;
@@ -539,7 +540,7 @@ export class AgentStore {
           s.win = [];
           s.lastTok = null;
           setStatus(s.tools.length ? 'waiting' : 'active', true);
-          rec.current.tokensRate = (n * 1000) / (t - since);
+          rec.current.tokensRate = (n * 1000) / Math.max(SAMPLE_MS, t - since);
           s.lastSample = t;
           this._pushSample(rec, t);
           return;

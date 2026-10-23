@@ -15,8 +15,8 @@
 //     tools without a span).
 //   execute_tool → a tool call (`gen_ai.tool.name`), `waiting`.
 //   invoke_agent → the agent (`gen_ai.agent.name`, else `.id`) the spans
-//     under it belong to; its end completes the agent. One with no model or
-//     tool spans under it (a remote agent) is the agent's whole run.
+//     under it belong to; its end completes the agent. A CLIENT one (a
+//     remote agent) is the agent's whole run.
 //   anything else → structure only (a root span's end closes what it left).
 
 import type { AdapterOptions, EventSink } from './ai-sdk';
@@ -34,6 +34,8 @@ export type OtelSpan = {
   endTime?: [number, number];
   /** 2 = ERROR. */
   status?: { code?: number };
+  /** SpanKind: 2 = CLIENT. */
+  kind?: number;
   spanContext(): { spanId: string };
   /** SDK 2.x. */
   parentSpanContext?: { spanId?: string };
@@ -126,17 +128,16 @@ export function createOtelProcessor(sink: EventSink, options: OtelOptions = {}):
     },
     count: options.countTokens ?? estimate,
     implicitRoot: false,
-    // Apps often run the tools a model asked for without a span.
-    toolsOutside: true,
+    // Apps often run the tools a model asked for without a span; one not
+    // followed by another call within 2 minutes is done.
+    toolsOutsideMs: 120_000,
     // A failing sink must not break the instrumented code.
     report: (err) => report(err),
   });
   const report = (err: unknown) => console.error('[agentstat]', err);
-  type Span = { kind: string; agent?: string; agentSpan?: string; start?: number };
-  // Open spans: kind, agent, enclosing agent span, start time.
+  type Span = { kind: string; agent?: string; start?: number };
+  // Open spans: kind, agent, start time.
   const spans = new Map<string, Span>();
-  // Agent spans with model or tool work under them.
-  const worked = new Set<string>();
 
   const start = (span: OtelSpan) => {
     const id = span.spanContext?.().spanId;
@@ -147,11 +148,11 @@ export function createOtelProcessor(sink: EventSink, options: OtelOptions = {}):
     const op = String(a['gen_ai.operation.name'] ?? '');
     // The span's own agent name (e.g. on execute_tool), else its agent span's.
     const agent = agentName(a) ?? parent?.agent;
-    const agentSpan = op === 'invoke_agent' ? id : parent?.agentSpan;
     const t = timeOf(span.startTime);
-    const kind = MODEL.has(op) ? 'model' : op === 'execute_tool' ? 'tool' : 'chain';
-    spans.set(id, { kind, agent, agentSpan, start: t });
-    if (kind !== 'chain' && agentSpan) worked.add(agentSpan);
+    // A remote agent (CLIENT invoke_agent span) runs like one model call.
+    const remote = op === 'invoke_agent' && span.kind === 2;
+    const kind = MODEL.has(op) || remote ? 'model' : op === 'execute_tool' ? 'tool' : 'chain';
+    spans.set(id, { kind, agent, start: t });
     const run = {
       name: kind === 'tool' ? String(a['gen_ai.tool.name'] ?? span.name ?? '') : span.name,
       metadata: { name: span.name, attributes: a, agent },
@@ -174,11 +175,13 @@ export function createOtelProcessor(sink: EventSink, options: OtelOptions = {}):
       const reasons = a['gen_ai.response.finish_reasons'];
       const list = Array.isArray(reasons) ? reasons.map(String) : typeof reasons === 'string' ? [reasons] : [];
       const ttfc = seconds(a['gen_ai.response.time_to_first_chunk'] ?? a['gen_ai.client.operation.time_to_first_chunk']);
+      const reported = Number.isFinite(tokens) && tokens >= 0 && a['gen_ai.usage.output_tokens'] !== undefined;
       m.modelEnd(
         id,
         {
-          tokens: Number.isFinite(tokens) && tokens >= 0 && a['gen_ai.usage.output_tokens'] !== undefined ? tokens : undefined,
-          text: outputText(a['gen_ai.output.messages']),
+          tokens: reported ? tokens : undefined,
+          // Parsed only when needed: recorded outputs can be large.
+          text: reported ? undefined : outputText(a['gen_ai.output.messages']),
           callsTools: list.some((r) => /tool/i.test(r)),
           since: s.start === undefined ? undefined : s.start + (ttfc ?? 0),
         },
@@ -189,14 +192,8 @@ export function createOtelProcessor(sink: EventSink, options: OtelOptions = {}):
     else {
       m.chainEnd(id, error, t);
       if (String(a['gen_ai.operation.name'] ?? '') !== 'invoke_agent') return;
-      const info = { name: span.name, attributes: a, agent: s.agent };
-      const own = typeof pick === 'function' ? pick(info) : (s.agent ?? fallback);
-      if (!own) return;
-      // A remote agent (nothing under it reported): the span is its run.
-      if (!worked.delete(id)) {
-        m.modelStart(id, undefined, { name: span.name, metadata: info }, s.start);
-        m.modelEnd(id, undefined, error, t);
-      } else m.agentEnd(own, t);
+      const own = typeof pick === 'function' ? pick({ name: span.name, attributes: a, agent: s.agent }) : (s.agent ?? fallback);
+      if (own) m.agentEnd(own, t);
     }
   };
 
@@ -216,7 +213,6 @@ export function createOtelProcessor(sink: EventSink, options: OtelOptions = {}):
     shutdown() {
       m.endAll(false);
       spans.clear();
-      worked.clear();
       return Promise.resolve();
     },
   };

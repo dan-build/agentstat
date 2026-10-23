@@ -32,12 +32,16 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
   `agents` prop's, which keep their names and colors). `describe(id, …)` sets
   a name, color or band; `remove(id)` takes an agent off. One stream can feed
   several charts. `agents` is now optional.
+- **`tokens` events take `since`** (same clock as `time`): output that
+  arrives as one block after the fact is plotted at its average rate over
+  `[since, time]`, and its time from `start` is the TTFT (the whole call if
+  `since` is the start itself).
 - **`AgentSource`**, for your own sources: `subscribe(listener, after)`
   delivers kept messages with `seq` above `after`, in `seq` order, then live
   ones. A chart that re-subscribes to the same source (StrictMode) passes the
   last `seq` it applied, so nothing is applied twice; a different source starts
   its stream data over.
-- **Adapters**, as separate entry points with no dependencies (~1 KB each,
+- **Adapters**, as separate entry points with no dependencies (0.5–2.5 KB each,
   server-safe):
   - **`@dan-build/agentstat/ai-sdk`** (Vercel AI SDK v5–v7):
     `createChatTracker` for `useChat` messages and status (with
@@ -50,13 +54,10 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
     processor for anything instrumented with the OpenTelemetry GenAI
     conventions — model calls (`chat`, `text_completion`,
     `generate_content`), tool calls (`execute_tool`) and agents
-    (`invoke_agent`, and remote agents with nothing under them), with span
+    (`invoke_agent`, and remote CLIENT agents as live runs), with span
     times, output tokens (or output text), time to first chunk, finish
-    reasons — waiting on tools the app runs without spans — and error
-    status. The README maps `gen_ai.*` to AgentStat events.
-- **`tokens` events take `since`**: output that arrives as one block after
-  the fact is plotted at its average rate over `[since, time]`, and its time
-  from `start` is the TTFT.
+    reasons — waiting on tools the app runs without spans, for up to 2
+    minutes — and error status. The README maps `gen_ai.*` to AgentStat events.
   - **`@dan-build/agentstat/sse`**: `createSseHandler` streams an agent
     stream as Server-Sent Events from any Fetch-API server (Next.js route
     handlers, Hono, Bun, Deno, Workers), optionally picking a stream per

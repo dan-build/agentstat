@@ -81,13 +81,44 @@ describe('createOtelProcessor', () => {
     expect(s.got[4][1]).toMatchObject({ count: 5 });
   });
 
-  it('reports a remote agent (no spans under it) as one run', () => {
+  it('reports a remote agent (CLIENT invoke_agent) as one live run; an outer agent span adds none', () => {
     const s = sink();
     const p = createOtelProcessor(s);
-    const remote = span({ 'gen_ai.operation.name': 'invoke_agent', 'gen_ai.agent.name': 'bedrock-agent' });
+    const team = span({ 'gen_ai.operation.name': 'invoke_agent', 'gen_ai.agent.name': 'team' });
+    p.onStart(team);
+    const remote = { ...span({ 'gen_ai.operation.name': 'invoke_agent', 'gen_ai.agent.name': 'bedrock-agent' }, team), kind: 2 };
     p.onStart(remote);
+    expect(s.seq()).toEqual(['bedrock-agent:start']); // live from its start
     end(p, remote);
+    end(p, team);
     expect(s.seq()).toEqual(['bedrock-agent:start', 'bedrock-agent:finish']);
+  });
+
+  it('a call that asks for tools and is never followed up is done after 2 minutes', () => {
+    vi.useFakeTimers();
+    const s = sink();
+    const p = createOtelProcessor(s, { agentId: 'a' });
+    const chat = span({ 'gen_ai.operation.name': 'chat' });
+    p.onStart(chat);
+    end(p, chat, { 'gen_ai.response.finish_reasons': ['tool_calls'] });
+    vi.advanceTimersByTime(119_000);
+    expect(s.seq()).toEqual(['a:start', 'a:tool-start:tools']);
+    vi.advanceTimersByTime(1_000);
+    expect(s.seq()).toEqual(['a:start', 'a:tool-start:tools', 'a:tool-end', 'a:finish']);
+    vi.useRealTimers();
+  });
+
+  it('through the store: a non-streamed call without TTFC has the whole call as its TTFT', () => {
+    const store = new AgentStore([], { maxHistoryPoints: 1000 }, 0);
+    const now = performance.now();
+    const p = createOtelProcessor({ push: (id, e) => { store.ensure(id, e.time ?? now, now); store.push(id, e, now); } }, { agentId: 'a' });
+    const chat: OtelSpan = { name: 'chat', attributes: { 'gen_ai.operation.name': 'chat' }, spanContext: () => ({ spanId: 'n' }), startTime: hr(now - 3_000) };
+    p.onStart(chat);
+    chat.attributes = { ...chat.attributes, 'gen_ai.usage.output_tokens': 300 };
+    chat.endTime = hr(now);
+    p.onEnd(chat);
+    expect(store.getStats('a', now)!.ttftMs).toBeCloseTo(3_000, -1);
+    expect(Math.max(...store.tokens.get('a')!.values())).toBeCloseTo(100, 0);
   });
 
   it('a throwing agentId function never reaches the instrumented app', () => {
@@ -117,8 +148,9 @@ describe('createOtelProcessor', () => {
     end(p, agent);
     expect(s.seq()).toEqual([
       'researcher:start', 'researcher:tokens',
-      'researcher:tool-start:tools', 'researcher:tool-end', // waiting on the tools it asked for…
-      'researcher:tool-start:search', 'researcher:tool-end', // …which turn out to be reported
+      'researcher:tool-start:tools', // waiting on the tools it asked for…
+      'researcher:tool-start:search', 'researcher:tool-end', // …which turn out to be reported (no gap)
+      'researcher:tool-end',
       'researcher:start', 'researcher:tokens', 'researcher:finish',
     ]);
     expect(s.got[1][1]).toMatchObject({ count: 40 });
@@ -152,9 +184,9 @@ describe('createOtelProcessor', () => {
     end(p, sub);
     end(p, root);
     expect(s.seq()).toEqual([
-      'orchestrator:start', 'orchestrator:tool-start:tools', // waits while it delegates
+      'orchestrator:start', 'orchestrator:tool-start:tools',
+      'orchestrator:tool-end', 'orchestrator:finish', // handed off: another agent's turn
       'coder:start', 'coder:tokens', 'coder:finish',
-      'orchestrator:tool-end', 'orchestrator:finish', // the workflow ended
     ]);
   });
 

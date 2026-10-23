@@ -141,8 +141,9 @@ export type AgentEvent =
       total?: number;
       /**
        * When this output began, if it arrives as one block after the fact
-       * (e.g. a call reported when it ended): plotted at its average rate
-       * over [since, time], and its time from `start` is the TTFT.
+       * (e.g. a call reported when it ended), in the same clock as `time`:
+       * plotted at its average rate over [since, time]; its time from
+       * `start` is the TTFT (or, if it's the start itself, the whole call).
        */
       since?: number;
       time?: number;
