@@ -62,10 +62,23 @@ const AI_SDK = '../dist/ai-sdk.js';
 const AG_UI = '../dist/ag-ui.js';
 const LANGCHAIN = '../dist/langchain.js';
 const SSE = '../dist/sse.js';
+const OTEL = '../dist/otel.js';
 const aiSdk: typeof import('../src/ai-sdk') | null = await import(/* @vite-ignore */ AI_SDK).catch(() => null);
 const agUi: typeof import('../src/ag-ui') | null = await import(/* @vite-ignore */ AG_UI).catch(() => null);
 const langchain: typeof import('../src/langchain') | null = await import(/* @vite-ignore */ LANGCHAIN).catch(() => null);
 const sse: typeof import('../src/sse') | null = await import(/* @vite-ignore */ SSE).catch(() => null);
+const otel: typeof import('../src/otel') | null = await import(/* @vite-ignore */ OTEL).catch(() => null);
+
+describe.skipIf(!otel)('built OpenTelemetry processor', () => {
+  it('maps a GenAI span', () => {
+    const got: string[] = [];
+    const p = otel!.createOtelProcessor({ push: (_id, e) => got.push(e.type) });
+    const span = { attributes: { 'gen_ai.operation.name': 'chat' }, spanContext: () => ({ spanId: 'x' }) };
+    p.onStart(span);
+    p.onEnd({ ...span, attributes: { ...span.attributes, 'gen_ai.usage.output_tokens': 3 } });
+    expect(got).toEqual(['start', 'tokens', 'finish']);
+  });
+});
 
 describe.skipIf(!sse)('built SSE transport', () => {
   it('serves a stream as server-sent events', async () => {

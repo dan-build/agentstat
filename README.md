@@ -234,6 +234,31 @@ the LangGraph subgraph it runs in (each agent of a supervisor or swarm), else
 to `fallback`. An agent called from inside a tool routes by name only if it
 has one; nested teams collapse to the outer team.
 
+### OpenTelemetry
+
+`@dan-build/agentstat/otel` is a span processor for anything instrumented
+with the OpenTelemetry GenAI conventions (no dependency on
+`@opentelemetry/*`; SDK 1.x and 2.x):
+
+```ts
+import { createOtelProcessor } from '@dan-build/agentstat/otel';
+
+const provider = new NodeTracerProvider({
+  spanProcessors: [createOtelProcessor(stream), new BatchSpanProcessor(exporter)],
+});
+```
+
+| `gen_ai.operation.name` | AgentStat |
+|---|---|
+| `chat`, `text_completion`, `generate_content` | a model call: `start` at the span's start; `gen_ai.usage.output_tokens` as output at its end, then complete — or `waiting` on tools if `gen_ai.response.finish_reasons` asks for them |
+| `execute_tool` | a tool call (`gen_ai.tool.name`): `waiting` |
+| `invoke_agent`, `create_agent` | the agent (`gen_ai.agent.name`, else `.id`) that the spans under it belong to; its end completes it |
+| anything else | structure only: the outermost span's end closes what it left open |
+
+Spans don't stream, so a call's rate is its average over the span. A span
+with status ERROR counts an error. Spans outside an agent span belong to
+`'agent'` (or the `agentId` you pass; a function decides every span).
+
 ### AG-UI
 
 `@dan-build/agentstat/ag-ui` maps AG-UI protocol events (no dependency on
