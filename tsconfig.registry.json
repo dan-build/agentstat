@@ -1,0 +1,16 @@
+{
+  // Type-checks the shadcn registry components against the library source,
+  // with stubs for the shadcn/ui primitives and lucide-react (registry/stubs).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "@dan-build/agentstat": ["./src/index.ts"],
+      "@/components/ui/*": ["./registry/stubs/ui/*"],
+      "@/components/agent-status-badge": ["./registry/agentstat/agent-status-badge.tsx"],
+      "@/lib/utils": ["./registry/stubs/utils.ts"],
+      "lucide-react": ["./registry/stubs/lucide-react.ts"]
+    }
+  },
+  "include": ["registry"]
+}

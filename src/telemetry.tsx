@@ -261,12 +261,12 @@ export function AgentStatusBadge({ agent, ...themed }: { agent: AgentTelemetry }
 type Seen = { severity: string; name: string; kind: string };
 
 /**
- * Anomalies active now, one line each ("Coder: stalled 12s while active").
- * Screen readers hear each once — when it starts, escalates or resolves —
- * not every time its numbers change.
+ * What to announce about `agents`' anomalies, for two always-present live
+ * regions (`polite` → role="status", `assertive` → role="alert"): each
+ * anomaly once — when it starts, escalates (critical goes to `assertive`)
+ * or resolves — not every time its numbers tick.
  */
-export function AnomalyBanner({ agents, ...themed }: { agents: AgentTelemetry[] } & TelemetryComponentProps) {
-  const root = useRoot(themed, 'agentstat-banner');
+export function useAnomalyAnnouncer(agents: AgentTelemetry[]): { polite: string; assertive: string } {
   const rows = agents.flatMap((a) => a.anomalies.map((x) => ({ a, x })));
   // Announcements, kept apart from the visible list (whose text ticks), in
   // live regions that are always there. Worked out when the set of anomalies
@@ -297,7 +297,18 @@ export function AnomalyBanner({ agents, ...themed }: { agents: AgentTelemetry[] 
       assertive: !lines.length ? said.assertive : urgent ? text : '',
     });
   }
-  const { polite, assertive } = said;
+  return { polite: said.polite, assertive: said.assertive };
+}
+
+/**
+ * Anomalies active now, one line each ("Coder: stalled 12s while active").
+ * Screen readers hear each once — when it starts, escalates or resolves —
+ * not every time its numbers change.
+ */
+export function AnomalyBanner({ agents, ...themed }: { agents: AgentTelemetry[] } & TelemetryComponentProps) {
+  const root = useRoot(themed, 'agentstat-banner');
+  const rows = agents.flatMap((a) => a.anomalies.map((x) => ({ a, x })));
+  const { polite, assertive } = useAnomalyAnnouncer(agents);
   return (
     <>
       <span className="agentstat-sr" role="status" style={SR}>
@@ -441,6 +452,22 @@ function bucket(segs: Seg[], minMs: number): Seg[] {
 }
 
 /**
+ * An agent's status history laid out on a `windowSeconds` window: `before`
+ * is the share of the window before its history starts, and `bars` the
+ * segments to draw (each with its `share` of the window), with flapping
+ * merged into buckets showing their most important status. `shown` is the
+ * unmerged history within the window (e.g. for a text list).
+ */
+export function timelineBars(agent: AgentTelemetry, windowSeconds = 300) {
+  const windowMs = Math.max(1, windowSeconds * 1000);
+  const shown = agent.history
+    .map((h) => ({ ...h, fromMs: Math.min(h.fromMs, windowMs) }))
+    .filter((h) => h.fromMs > h.toMs);
+  const bars = bucket(shown, windowMs / 200).map((h) => ({ ...h, share: (h.fromMs - h.toMs) / windowMs }));
+  return { before: (windowMs - (shown[0]?.fromMs ?? 0)) / windowMs, bars, shown };
+}
+
+/**
  * An agent's status over the last `windowSeconds` (default 300; at most the
  * hook's `historySeconds`): one bar, a segment per status, sized to time, so
  * stacked timelines line up. Statuses differ by fill pattern as well as
@@ -452,23 +479,18 @@ export function AgentTimeline({
   ...themed
 }: { agent: AgentTelemetry; windowSeconds?: number } & TelemetryComponentProps) {
   const root = useRoot(themed, 'agentstat-timeline-wrap');
-  const windowMs = Math.max(1, windowSeconds * 1000);
-  const shown = agent.history
-    .map((h) => ({ ...h, fromMs: Math.min(h.fromMs, windowMs) }))
-    .filter((h) => h.fromMs > h.toMs);
-  const before = windowMs - (shown[0]?.fromMs ?? 0);
-  const bars = bucket(shown, windowMs / 200);
+  const { before, bars, shown } = timelineBars(agent, windowSeconds);
   return (
     <div {...root}>
       <style>{CSS}</style>
       <div className="agentstat-timeline" aria-hidden="true" data-dense={bars.length > 40 ? '' : undefined}>
-        {before > 0 && <span className="agentstat-gap" style={{ flexGrow: before / windowMs }} />}
+        {before > 0 && <span className="agentstat-gap" style={{ flexGrow: before }} />}
         {bars.map((h, i) => (
           <span
             key={i}
             data-s={h.status}
             title={`${formatStatus(h.status)} · ${formatSpan(h.fromMs - h.toMs)}`}
-            style={{ flexGrow: (h.fromMs - h.toMs) / windowMs }}
+            style={{ flexGrow: h.share }}
           />
         ))}
       </div>

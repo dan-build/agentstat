@@ -39,6 +39,10 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
   `onAnomaly` / `onAnomalyEnd` / `onHealthChange` and static `agents` like
   the chart's. Anomalies are announced to screen readers once each.
   Tree-shaken away from apps that only render the chart.
+- **shadcn/ui registry**: the four components as shadcn/ui source (Tailwind,
+  `Badge` / `Alert` / `Table`, lucide icons), installable with `npx shadcn
+  add` from `public/r/` in this repository. The library exports the
+  behavior they share: `useAnomalyAnnouncer` and `timelineBars`.
 - **`tokens` events take `since`** (same clock as `time`): output that
   arrives as one block after the fact is plotted at its average rate over
   `[since, time]`, and its time from `start` is the TTFT (the whole call if
