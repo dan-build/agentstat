@@ -296,6 +296,30 @@ More integrations — LangChain, WebSocket/SSE, MCP — are in the
 
 ---
 
+### Without the chart
+
+`useAgentTelemetry(source)` runs the same event handling and anomaly
+detection without a canvas, and returns each agent's live status, time in
+status, open tool, rate, tokens, TTFT, health, anomalies and status history
+— for your own UI, or these components:
+
+```tsx
+import { useAgentTelemetry, AgentStatusBadge, AnomalyBanner, AgentRoster, AgentTimeline } from '@dan-build/agentstat';
+
+const agents = useAgentTelemetry(stream);
+
+<AnomalyBanner agents={agents} />                 {/* "Coder: stalled 12s while active" */}
+<AgentRoster agents={agents} />                   {/* status, rate, tokens, health per agent */}
+<AgentStatusBadge agent={agents[0]} />            {/* "Waiting · bash · 12s" */}
+<AgentTimeline agent={agents[0]} />               {/* status over the last 5 minutes */}
+```
+
+They use the chart's theme (`theme="light" | "dark" | "system"`), show status
+in words and icons rather than color alone, and announce anomalies to screen
+readers. An app that renders only the chart doesn't ship them.
+
+---
+
 ## What you see
 
 - **Lines over time** for progress (`metric="progress"`), token rate

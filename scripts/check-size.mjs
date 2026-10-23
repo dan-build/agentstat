@@ -20,7 +20,9 @@ import { build } from 'esbuild';
 // without wiring; the base for the AI SDK / AG-UI adapters) → unknown
 // progress 22.7 KB (`metric="auto"`: no flat 0% line for agents that never
 // report progress).
-const BUDGETS = { 'dist/index.js': 23_000, 'dist/index.cjs': 23_500 };
+// → telemetry hook + components 25.4 KB for every export together; an app
+// that renders the chart from a stream ships ~22.6 KB (CHART_ONLY_BUDGET).
+const BUDGETS = { 'dist/index.js': 25_500, 'dist/index.cjs': 26_000 };
 // The standalone detectors (detectAnomalies) on their own.
 const TREESHAKE_BUDGET = 2_500;
 
@@ -65,6 +67,23 @@ for (const [file, ADAPTER_BUDGET] of Object.entries(ADAPTER_BUDGETS)) {
 }
 
 const entry = fileURLToPath(new URL('../dist/index.js', import.meta.url));
+
+// What an app that renders the chart from a stream ships: the other exports
+// (telemetry hook and components) must tree-shake away.
+const CHART_ONLY_BUDGET = 23_000;
+{
+  const out = await build({
+    stdin: { contents: `export { AgentStat, useAgentStream } from ${JSON.stringify(entry)};`, resolveDir: '.' },
+    bundle: true,
+    minify: true,
+    write: false,
+    format: 'esm',
+    external: ['react', 'react-dom', 'react/jsx-runtime'],
+    logLevel: 'silent',
+  });
+  const gz = gzipSync(out.outputFiles[0].contents).length;
+  report(gz <= CHART_ONLY_BUDGET, `chart-only import (AgentStat + useAgentStream): ${gz} B (budget ${CHART_ONLY_BUDGET} B)`);
+}
 const out = await build({
   stdin: { contents: `export { detectAnomalies } from ${JSON.stringify(entry)};`, resolveDir: '.' },
   bundle: true,
