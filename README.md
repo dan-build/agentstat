@@ -250,14 +250,21 @@ const provider = new NodeTracerProvider({
 
 | `gen_ai.operation.name` | AgentStat |
 |---|---|
-| `chat`, `text_completion`, `generate_content` | a model call: `start` at the span's start; `gen_ai.usage.output_tokens` as output at its end, then complete — or `waiting` on tools if `gen_ai.response.finish_reasons` asks for them |
+| `chat`, `text_completion`, `generate_content` | a model call: `start` at the span's start; at its end, its output (`gen_ai.usage.output_tokens`, else the text of `gen_ai.output.messages`) at its average rate since the first chunk; then complete — or, if `gen_ai.response.finish_reasons` asks for tools, `waiting` until the agent's next call (apps often run tools without a span) |
 | `execute_tool` | a tool call (`gen_ai.tool.name`): `waiting` |
-| `invoke_agent`, `create_agent` | the agent (`gen_ai.agent.name`, else `.id`) that the spans under it belong to; its end completes it |
+| `invoke_agent` | the agent (`gen_ai.agent.name`, else `.id`) that the spans under it belong to; its end completes it. With nothing under it (a remote agent), the span is the agent's run |
 | anything else | structure only: the outermost span's end closes what it left open |
 
-Spans don't stream, so a call's rate is its average over the span. A span
-with status ERROR counts an error. Spans outside an agent span belong to
-`'agent'` (or the `agentId` you pass; a function decides every span).
+Spans don't stream, so a call shows as one point at its average rate; its
+time to first token comes from `gen_ai.response.time_to_first_chunk` when the
+instrumentation reports it. A span with status ERROR counts an error. A span
+belongs to its own `gen_ai.agent.name`, else its agent span's, else `'agent'`
+(or the `agentId` you pass; a function decides every span). Two concurrent
+invocations of one agent name share its line.
+
+Instrumentations that set `gen_ai.operation.name` work (the official OpenAI
+instrumentation, OpenLLMetry, AI SDK v7's `@ai-sdk/otel`). AI SDK v6 and
+earlier telemetry doesn't set it: use `@dan-build/agentstat/ai-sdk` there.
 
 ### AG-UI
 

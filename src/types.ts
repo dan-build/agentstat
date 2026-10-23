@@ -135,7 +135,18 @@ export type AgentEvent =
    * count for the agent: the first total only sets the starting point, and a
    * smaller total than before starts a new count). Status → `active`.
    */
-  | { type: 'tokens'; count?: number; total?: number; time?: number }
+  | {
+      type: 'tokens';
+      count?: number;
+      total?: number;
+      /**
+       * When this output began, if it arrives as one block after the fact
+       * (e.g. a call reported when it ended): plotted at its average rate
+       * over [since, time], and its time from `start` is the TTFT.
+       */
+      since?: number;
+      time?: number;
+    }
   /** A tool call began (nest freely). Status → `waiting` while any is open. */
   | { type: 'tool-start'; name?: string; time?: number }
   /**

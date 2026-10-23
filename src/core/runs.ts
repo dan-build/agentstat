@@ -22,6 +22,8 @@ export type ModelOutput = {
   text?: string;
   /** It asked for tools (or structured output): its agent goes on with them. */
   callsTools?: boolean;
+  /** When its output began, if it's reported as one block at the end. */
+  since?: number;
 };
 
 export interface RunMapperOptions {
@@ -32,6 +34,11 @@ export interface RunMapperOptions {
   implicitRoot: boolean;
   /** What to do with an error thrown by the sink (default: let it throw). */
   report?: (err: unknown) => void;
+  /**
+   * Tools may run unreported (the app runs them): an agent whose model call
+   * asked for tools is `waiting` until its next call, not handing over.
+   */
+  toolsOutside?: boolean;
 }
 
 type Kind = 'model' | 'tool' | 'chain';
@@ -47,7 +54,7 @@ type Run = { kind: Kind; root: string; agent?: string; name: string; streamed: b
  * arrival.
  */
 export function createRunMapper(sink: EventSink, options: RunMapperOptions) {
-  const { pick, count, implicitRoot, report } = options;
+  const { pick, count, implicitRoot, report, toolsOutside } = options;
   const runs = new Map<string, Run>();
   // Open model/tool runs per agent; agents not finished; agents per root.
   const open = new Map<string, number>();
@@ -57,9 +64,13 @@ export function createRunMapper(sink: EventSink, options: RunMapperOptions) {
   const handover = new Map<string, string>();
   // Agents that reported an error since their last start.
   const failed = new Set<string>();
+  // Agents waiting on tools that run unreported (toolsOutside).
+  const outside = new Set<string>();
   let current: string | undefined;
 
   const emit = (id: string, e: AgentEvent, t?: number) => {
+    // Whatever the agent does next ends its wait on unreported tools.
+    if (outside.delete(id)) emit(id, { type: 'tool-end', name: 'tools' }, t);
     if (e.type === 'finish') busy.delete(id);
     else busy.add(id);
     if (e.type === 'error') failed.add(id);
@@ -173,14 +184,22 @@ export function createRunMapper(sink: EventSink, options: RunMapperOptions) {
         // A model that didn't stream: its whole output arrives now.
         else if (!r.streamed) {
           const n = out?.tokens ?? count(out?.text ?? '');
-          if (n > 0) emit(r.agent, { type: 'tokens', count: n }, t);
+          if (n > 0) emit(r.agent, { type: 'tokens', count: n, ...(out?.since !== undefined ? { since: out.since } : {}) }, t);
         }
       }
       const idle = close(runId, r);
       if (idle) {
-        // Asked for tools (or structured output): hand over to what's next.
-        if (!error && out?.callsTools) handover.set(idle, r.root);
-        else emit(idle, { type: 'finish' }, t);
+        // Asked for tools (or structured output): hand over to what's next
+        // — or, when tools run unreported, wait on them.
+        if (!error && out?.callsTools) {
+          if (toolsOutside) {
+            emit(idle, { type: 'tool-start', name: 'tools' }, t);
+            outside.add(idle);
+            // A call that is its own root: the app runs the tools and calls
+            // again; the agent waits until then (or shutdown).
+            if (r.root === runId) return void byRoot.delete(runId);
+          } else handover.set(idle, r.root);
+        } else emit(idle, { type: 'finish' }, t);
       }
       // A model call at the root reported its own error above.
       ended(runId, r, false, t);
@@ -209,6 +228,7 @@ export function createRunMapper(sink: EventSink, options: RunMapperOptions) {
     endAll(error: boolean) {
       // Roots with agents need ending; the rest only need forgetting.
       for (const root of Array.from(byRoot.keys())) endRoot(root, error);
+      for (const agent of Array.from(outside)) emit(agent, { type: 'finish' });
       runs.clear();
       handover.clear();
       current = undefined;

@@ -7,12 +7,16 @@
 //
 // Mapping (GenAI semantic conventions, `gen_ai.operation.name`):
 //   chat / text_completion / generate_content → a model call: start at the
-//     span's start; at its end, `gen_ai.usage.output_tokens` as output (spans
-//     don't stream, so a call's rate is its average), then complete — or, if
-//     `gen_ai.response.finish_reasons` asks for tools, waiting on them.
+//     span's start; at its end its output (`gen_ai.usage.output_tokens`, else
+//     the text of `gen_ai.output.messages`) at its average rate since its
+//     first chunk (`…time_to_first_chunk`, which is also the TTFT) or its
+//     start; then complete — or, if `gen_ai.response.finish_reasons` asks for
+//     tools, waiting on them until the agent's next call (apps often run
+//     tools without a span).
 //   execute_tool → a tool call (`gen_ai.tool.name`), `waiting`.
-//   invoke_agent / create_agent → the agent (`gen_ai.agent.name`) that the
-//     spans under it belong to; its end completes the agent.
+//   invoke_agent → the agent (`gen_ai.agent.name`, else `.id`) the spans
+//     under it belong to; its end completes the agent. One with no model or
+//     tool spans under it (a remote agent) is the agent's whole run.
 //   anything else → structure only (a root span's end closes what it left).
 
 import type { AdapterOptions, EventSink } from './ai-sdk';
@@ -55,14 +59,37 @@ export interface OtelOptions extends AdapterOptions {
 }
 
 const MODEL = new Set(['chat', 'text_completion', 'generate_content']);
-const AGENT = new Set(['invoke_agent', 'create_agent']);
 const estimate = (text: string) => text.length / 4;
 
-/** HrTime → this process's performance.now() clock. */
+/**
+ * HrTime → this process's performance.now() clock. The SDK stamps spans from
+ * the wall clock (Date.now()), so convert with the current offset between
+ * the two, not with the page's time origin (they drift apart).
+ */
 const timeOf = (hr?: [number, number]) =>
   Array.isArray(hr) && typeof performance !== 'undefined'
-    ? hr[0] * 1000 + hr[1] / 1e6 - performance.timeOrigin
+    ? hr[0] * 1000 + hr[1] / 1e6 - (Date.now() - performance.now())
     : undefined;
+
+/** Seconds attribute → ms, or undefined. */
+const seconds = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v * 1000 : undefined);
+
+/** Text of `gen_ai.output.messages` (a JSON string or an array of messages with parts). */
+function outputText(v: unknown): string {
+  let msgs: unknown = v;
+  if (typeof v === 'string') {
+    try {
+      msgs = JSON.parse(v);
+    } catch {
+      return '';
+    }
+  }
+  let out = '';
+  for (const msg of Array.isArray(msgs) ? msgs : []) {
+    for (const p of Array.isArray(msg?.parts) ? msg.parts : []) if (typeof p?.content === 'string') out += p.content;
+  }
+  return out;
+}
 
 const agentName = (a: Record<string, unknown>) => {
   const v = a['gen_ai.agent.name'] ?? a['gen_ai.agent.id'];
@@ -99,67 +126,97 @@ export function createOtelProcessor(sink: EventSink, options: OtelOptions = {}):
     },
     count: options.countTokens ?? estimate,
     implicitRoot: false,
+    // Apps often run the tools a model asked for without a span.
+    toolsOutside: true,
     // A failing sink must not break the instrumented code.
-    report: (err) => console.error('[agentstat]', err),
+    report: (err) => report(err),
   });
-  // Agent of each open span (inherited from its enclosing agent span).
-  const agentOf = new Map<string, string | undefined>();
-  const kindOf = new Map<string, string>();
+  const report = (err: unknown) => console.error('[agentstat]', err);
+  type Span = { kind: string; agent?: string; agentSpan?: string; start?: number };
+  // Open spans: kind, agent, enclosing agent span, start time.
+  const spans = new Map<string, Span>();
+  // Agent spans with model or tool work under them.
+  const worked = new Set<string>();
+
+  const start = (span: OtelSpan) => {
+    const id = span.spanContext?.().spanId;
+    if (!id) return;
+    const a = span.attributes ?? {};
+    const parentId = span.parentSpanContext?.spanId ?? span.parentSpanId;
+    const parent = parentId ? spans.get(parentId) : undefined;
+    const op = String(a['gen_ai.operation.name'] ?? '');
+    // The span's own agent name (e.g. on execute_tool), else its agent span's.
+    const agent = agentName(a) ?? parent?.agent;
+    const agentSpan = op === 'invoke_agent' ? id : parent?.agentSpan;
+    const t = timeOf(span.startTime);
+    const kind = MODEL.has(op) ? 'model' : op === 'execute_tool' ? 'tool' : 'chain';
+    spans.set(id, { kind, agent, agentSpan, start: t });
+    if (kind !== 'chain' && agentSpan) worked.add(agentSpan);
+    const run = {
+      name: kind === 'tool' ? String(a['gen_ai.tool.name'] ?? span.name ?? '') : span.name,
+      metadata: { name: span.name, attributes: a, agent },
+    };
+    if (kind === 'model') m.modelStart(id, parentId, run, t);
+    else if (kind === 'tool') m.toolStart(id, parentId, run, t);
+    else m.chainStart(id, parentId, t);
+  };
+
+  const end = (span: OtelSpan) => {
+    const id = span.spanContext?.().spanId;
+    const s = id ? spans.get(id) : undefined;
+    if (!id || !s) return;
+    spans.delete(id);
+    const a = span.attributes ?? {};
+    const t = timeOf(span.endTime);
+    const error = span.status?.code === 2;
+    if (s.kind === 'model') {
+      const tokens = Number(a['gen_ai.usage.output_tokens']);
+      const reasons = a['gen_ai.response.finish_reasons'];
+      const list = Array.isArray(reasons) ? reasons.map(String) : typeof reasons === 'string' ? [reasons] : [];
+      const ttfc = seconds(a['gen_ai.response.time_to_first_chunk'] ?? a['gen_ai.client.operation.time_to_first_chunk']);
+      m.modelEnd(
+        id,
+        {
+          tokens: Number.isFinite(tokens) && tokens >= 0 && a['gen_ai.usage.output_tokens'] !== undefined ? tokens : undefined,
+          text: outputText(a['gen_ai.output.messages']),
+          callsTools: list.some((r) => /tool/i.test(r)),
+          since: s.start === undefined ? undefined : s.start + (ttfc ?? 0),
+        },
+        error,
+        t
+      );
+    } else if (s.kind === 'tool') m.toolEnd(id, error, t);
+    else {
+      m.chainEnd(id, error, t);
+      if (String(a['gen_ai.operation.name'] ?? '') !== 'invoke_agent') return;
+      const info = { name: span.name, attributes: a, agent: s.agent };
+      const own = typeof pick === 'function' ? pick(info) : (s.agent ?? fallback);
+      if (!own) return;
+      // A remote agent (nothing under it reported): the span is its run.
+      if (!worked.delete(id)) {
+        m.modelStart(id, undefined, { name: span.name, metadata: info }, s.start);
+        m.modelEnd(id, undefined, error, t);
+      } else m.agentEnd(own, t);
+    }
+  };
+
+  // Telemetry must never break the instrumented code.
+  const safe = (fn: (span: OtelSpan) => void) => (span: OtelSpan) => {
+    try {
+      fn(span);
+    } catch (err) {
+      report(err);
+    }
+  };
 
   return {
-    onStart(span) {
-      const id = span.spanContext?.().spanId;
-      if (!id) return;
-      const a = span.attributes ?? {};
-      const parent = span.parentSpanContext?.spanId ?? span.parentSpanId;
-      const op = String(a['gen_ai.operation.name'] ?? '');
-      const agent = (AGENT.has(op) ? agentName(a) : undefined) ?? (parent ? agentOf.get(parent) : undefined);
-      agentOf.set(id, agent);
-      const info: OtelSpanInfo = { name: span.name, attributes: a, agent };
-      const t = timeOf(span.startTime);
-      const kind = MODEL.has(op) ? 'model' : op === 'execute_tool' ? 'tool' : 'chain';
-      kindOf.set(id, kind);
-      const run = { name: kind === 'tool' ? String(a['gen_ai.tool.name'] ?? span.name ?? '') : span.name, metadata: info };
-      if (kind === 'model') m.modelStart(id, parent, run, t);
-      else if (kind === 'tool') m.toolStart(id, parent, run, t);
-      else m.chainStart(id, parent, t);
-    },
-    onEnd(span) {
-      const id = span.spanContext?.().spanId;
-      if (!id) return;
-      const a = span.attributes ?? {};
-      const t = timeOf(span.endTime);
-      const error = span.status?.code === 2;
-      const kind = kindOf.get(id);
-      kindOf.delete(id);
-      const agent = agentOf.get(id);
-      agentOf.delete(id);
-      if (kind === 'model') {
-        const tokens = Number(a['gen_ai.usage.output_tokens']);
-        const reasons = a['gen_ai.response.finish_reasons'];
-        const list = Array.isArray(reasons) ? reasons.map(String) : typeof reasons === 'string' ? [reasons] : [];
-        m.modelEnd(
-          id,
-          {
-            tokens: Number.isFinite(tokens) && tokens >= 0 ? tokens : undefined,
-            callsTools: list.some((r) => /tool/i.test(r)),
-          },
-          error,
-          t
-        );
-      } else if (kind === 'tool') m.toolEnd(id, error, t);
-      else {
-        m.chainEnd(id, error, t);
-        // An agent span ended: the agent is done (unless still working).
-        if (AGENT.has(String(a['gen_ai.operation.name'] ?? '')) && agent) {
-          const own = typeof pick === 'function' ? pick({ name: span.name, attributes: a, agent }) : agent;
-          if (own) m.agentEnd(own, t);
-        }
-      }
-    },
+    onStart: safe(start),
+    onEnd: safe(end),
     forceFlush: () => Promise.resolve(),
     shutdown() {
       m.endAll(false);
+      spans.clear();
+      worked.clear();
       return Promise.resolve();
     },
   };

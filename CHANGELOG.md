@@ -50,8 +50,13 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
     processor for anything instrumented with the OpenTelemetry GenAI
     conventions — model calls (`chat`, `text_completion`,
     `generate_content`), tool calls (`execute_tool`) and agents
-    (`invoke_agent`), with span times, output tokens, finish reasons and
-    error status. The README maps `gen_ai.*` to AgentStat events.
+    (`invoke_agent`, and remote agents with nothing under them), with span
+    times, output tokens (or output text), time to first chunk, finish
+    reasons — waiting on tools the app runs without spans — and error
+    status. The README maps `gen_ai.*` to AgentStat events.
+- **`tokens` events take `since`**: output that arrives as one block after
+  the fact is plotted at its average rate over `[since, time]`, and its time
+  from `start` is the TTFT.
   - **`@dan-build/agentstat/sse`**: `createSseHandler` streams an agent
     stream as Server-Sent Events from any Fetch-API server (Next.js route
     handlers, Hono, Bun, Deno, Workers), optionally picking a stream per

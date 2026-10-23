@@ -54,7 +54,9 @@ for (const [file, budget] of Object.entries(BUDGETS)) {
 // handover (concurrent runs, supervisors, parallel agents, failed and stopped
 // runs end correctly — verified live against LangGraph). sse 2.5 KB: it
 // carries the stream core (createAgentStream for server code).
-const ADAPTER_BUDGETS = { 'dist/ai-sdk.js': 2_000, 'dist/ag-ui.js': 2_000, 'dist/langchain.js': 2_200, 'dist/sse.js': 2_500, 'dist/otel.js': 2_200 };
+// langchain 2.2 → 2.5 KB and otel 2.5 KB: both bundle the shared run tracker
+// (src/core/runs.ts), incl. block output (`since`) and unreported tools.
+const ADAPTER_BUDGETS = { 'dist/ai-sdk.js': 2_000, 'dist/ag-ui.js': 2_000, 'dist/langchain.js': 2_500, 'dist/sse.js': 2_500, 'dist/otel.js': 2_500 };
 for (const [file, ADAPTER_BUDGET] of Object.entries(ADAPTER_BUDGETS)) {
   const out = await build({ entryPoints: [file], bundle: true, minify: true, write: false, format: 'esm', logLevel: 'silent' });
   const gz = gzipSync(out.outputFiles[0].contents).length;
