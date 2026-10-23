@@ -26,9 +26,10 @@ export function AgentRoster({
         <TableRow>
           <TableHead>Agent</TableHead>
           <TableHead>Status</TableHead>
-          <TableHead className="text-right">Rate</TableHead>
+          {/* Narrow screens keep agent, status and tokens. */}
+          <TableHead className="hidden text-right sm:table-cell">Rate</TableHead>
           <TableHead className="text-right">Tokens</TableHead>
-          <TableHead className="text-right">Health</TableHead>
+          <TableHead className="hidden text-right sm:table-cell">Health</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -40,11 +41,15 @@ export function AgentRoster({
             <TableCell>
               <AgentStatusBadge agent={agent} />
             </TableCell>
-            <TableCell className="text-right tabular-nums">{rate.format(agent.tokensRate)}&nbsp;t/s</TableCell>
+            <TableCell className="hidden text-right tabular-nums sm:table-cell">
+              {rate.format(agent.tokensRate)}&nbsp;t/s
+            </TableCell>
             <TableCell className="text-right tabular-nums" title={whole.format(agent.totalTokens)}>
               {agent.totalTokens < 100_000 ? whole.format(agent.totalTokens) : compact.format(agent.totalTokens)}
             </TableCell>
-            <TableCell className="text-right tabular-nums">{agent.health === null ? '–' : agent.health}</TableCell>
+            <TableCell className="hidden text-right tabular-nums sm:table-cell">
+              {agent.health === null ? '–' : agent.health}
+            </TableCell>
           </TableRow>
         ))}
       </TableBody>

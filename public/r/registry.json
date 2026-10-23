@@ -20,7 +20,8 @@
           "path": "registry/agentstat/agent-status-badge.tsx",
           "type": "registry:component"
         }
-      ]
+      ],
+      "docs": "Pass agents from useAgentTelemetry(source) (@dan-build/agentstat 0.6 or later): https://github.com/dan-build/agentstat#without-the-chart"
     },
     {
       "name": "anomaly-banner",
@@ -39,7 +40,8 @@
           "path": "registry/agentstat/anomaly-banner.tsx",
           "type": "registry:component"
         }
-      ]
+      ],
+      "docs": "Pass agents from useAgentTelemetry(source) (@dan-build/agentstat 0.6 or later): https://github.com/dan-build/agentstat#without-the-chart"
     },
     {
       "name": "agent-roster",
@@ -58,7 +60,8 @@
           "path": "registry/agentstat/agent-roster.tsx",
           "type": "registry:component"
         }
-      ]
+      ],
+      "docs": "Pass agents from useAgentTelemetry(source) (@dan-build/agentstat 0.6 or later): https://github.com/dan-build/agentstat#without-the-chart"
     },
     {
       "name": "agent-timeline",
@@ -73,7 +76,8 @@
           "path": "registry/agentstat/agent-timeline.tsx",
           "type": "registry:component"
         }
-      ]
+      ],
+      "docs": "Pass agents from useAgentTelemetry(source) (@dan-build/agentstat 0.6 or later): https://github.com/dan-build/agentstat#without-the-chart"
     }
   ]
 }

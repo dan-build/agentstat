@@ -318,7 +318,6 @@ They use the chart's theme (`theme="light" | "dark" | "system"`), show status
 in words and icons rather than color alone, and announce anomalies to screen
 readers. An app that renders only the chart doesn't ship them.
 
-
 #### shadcn/ui
 
 The same components as shadcn/ui source — Tailwind, its `Badge`, `Alert`
@@ -331,7 +330,15 @@ npx shadcn@latest add https://raw.githubusercontent.com/dan-build/agentstat/main
 
 They take the `agents` from `useAgentTelemetry` and keep its behavior (e.g.
 announcing each anomaly once, via `useAnomalyAnnouncer`; timeline layout via
-`timelineBars`).
+`timelineBars`). To add them by name, register the namespace in
+`components.json`:
+
+```json
+{ "registries": { "@agentstat": "https://raw.githubusercontent.com/dan-build/agentstat/main/public/r/{name}.json" } }
+```
+
+then `npx shadcn@latest add @agentstat/agent-roster`.
+
 ---
 
 ## What you see

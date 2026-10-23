@@ -48,10 +48,12 @@ export function AgentStatusBadge({ agent, className }: { agent: AgentTelemetry; 
     >
       <Icon aria-hidden="true" className="size-3 shrink-0" />
       <span>{label}</span>
+      {/* Severity in words too, not only color. */}
+      {tone && <span className="sr-only">({tone})</span>}
       {agent.tool !== null && (
         <>
           <span aria-hidden="true">·</span>
-          <span className="min-w-[4ch] max-w-[16ch] truncate text-foreground" title={agent.tool || 'tool'}>
+          <span className="min-w-0 max-w-[16ch] truncate text-foreground" title={agent.tool || 'tool'}>
             <bdi>{agent.tool || 'tool'}</bdi>
           </span>
         </>

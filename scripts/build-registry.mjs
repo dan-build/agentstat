@@ -13,7 +13,8 @@ const base = process.env.REGISTRY_BASE ?? 'https://raw.githubusercontent.com/dan
 const registry = JSON.parse(readFileSync('registry.json', 'utf8').replaceAll('{{base}}', base));
 const out = new Map();
 for (const item of registry.items) {
-  const files = item.files.map((f) => ({ ...f, content: readFileSync(f.path, 'utf8') }));
+  // LF whatever the checkout (Windows autocrlf), so the output is the same.
+  const files = item.files.map((f) => ({ ...f, content: readFileSync(f.path, 'utf8').replace(/\r\n/g, '\n') }));
   out.set(
     `public/r/${item.name}.json`,
     JSON.stringify({ $schema: 'https://ui.shadcn.com/schema/registry-item.json', ...item, files }, null, 2) + '\n'

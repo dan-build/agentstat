@@ -3,14 +3,18 @@
 import { timelineBars, type AgentStatus, type AgentTelemetry } from '@dan-build/agentstat';
 import { cn } from '@/lib/utils';
 
-// Told apart by pattern as well as color (waiting and hallucinating hatched).
+// Told apart by pattern as well as color: solid (active, thinking), diagonal
+// hatch (waiting, hallucinating), vertical stripes (stuck), faint (complete).
+// Patterns use currentColor, so they follow a locally scoped dark theme.
+const HATCH = 'bg-[repeating-linear-gradient(135deg,currentColor_0_3px,transparent_3px_5px)]';
 const FILL: Record<AgentStatus, string> = {
   active: 'bg-emerald-700 dark:bg-emerald-400',
   thinking: 'bg-blue-700 dark:bg-blue-400',
-  waiting: 'bg-[repeating-linear-gradient(135deg,var(--color-muted-foreground)_0_3px,transparent_3px_5px)]',
-  complete: 'bg-muted-foreground/30',
-  stuck: 'bg-amber-600 dark:bg-amber-400',
-  hallucinating: 'bg-[repeating-linear-gradient(135deg,var(--color-destructive)_0_3px,transparent_3px_5px)]',
+  waiting: `text-muted-foreground ${HATCH}`,
+  complete: 'bg-muted-foreground/50',
+  stuck:
+    'text-amber-700 dark:text-amber-400 bg-[repeating-linear-gradient(90deg,currentColor_0_3px,transparent_3px_5px)]',
+  hallucinating: `text-destructive ${HATCH}`,
 };
 
 const LABEL: Record<AgentStatus, string> = {
@@ -43,7 +47,10 @@ export function AgentTimeline({
   const { before, bars, shown } = timelineBars(agent, windowSeconds);
   return (
     <div className={className}>
-      <div aria-hidden="true" className={cn('flex h-2.5 overflow-hidden rounded-full bg-muted', bars.length <= 40 && 'gap-0.5')}>
+      <div
+        aria-hidden="true"
+        className={cn('flex h-2.5 overflow-hidden rounded-full bg-muted', bars.length <= 40 && 'gap-0.5')}
+      >
         {before > 0 && <span style={{ flexGrow: before }} />}
         {bars.map((bar, i) => (
           <span

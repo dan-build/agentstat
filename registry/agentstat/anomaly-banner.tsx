@@ -24,7 +24,8 @@ export function AnomalyBanner({ agents, className }: { agents: AgentTelemetry[];
         {assertive}
       </span>
       {rows.length > 0 && (
-        <Alert variant={critical ? 'destructive' : 'default'} className={className}>
+        // Not a live region itself (its numbers tick): the regions above announce.
+        <Alert role={undefined} variant={critical ? 'destructive' : 'default'} className={className}>
           <Icon aria-hidden="true" />
           <AlertTitle>{critical ? 'Agents need attention' : 'Unusual agent activity'}</AlertTitle>
           <AlertDescription>
@@ -43,7 +44,7 @@ export function AnomalyBanner({ agents, className }: { agents: AgentTelemetry[];
                   <span className="max-w-[40%] shrink truncate font-medium text-foreground" title={agent.name}>
                     <bdi>{agent.name}</bdi>
                   </span>
-                  <span className="min-w-0 flex-1 break-words">
+                  <span className="min-w-0 flex-1 break-words text-muted-foreground">
                     <span className="sr-only">{anomaly.severity}: </span>
                     {anomaly.message}
                   </span>

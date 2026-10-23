@@ -162,8 +162,8 @@ const CSS = `
 .agentstat-timeline [data-s="active"]{background:var(--as-active)}
 .agentstat-timeline [data-s="thinking"]{background:var(--as-thinking)}
 .agentstat-timeline [data-s="waiting"]{background:repeating-linear-gradient(135deg,var(--as-text-tertiary) 0 3px,transparent 3px 5px)}
-.agentstat-timeline [data-s="complete"]{background:color-mix(in srgb,var(--as-text-tertiary) 30%,transparent)}
-.agentstat-timeline [data-s="stuck"]{background:var(--as-warning)}
+.agentstat-timeline [data-s="complete"]{background:color-mix(in srgb,var(--as-text-tertiary) 50%,transparent)}
+.agentstat-timeline [data-s="stuck"]{background:repeating-linear-gradient(90deg,var(--as-warning) 0 3px,transparent 3px 5px)}
 .agentstat-timeline [data-s="hallucinating"]{background:repeating-linear-gradient(135deg,var(--as-critical) 0 3px,transparent 3px 5px)}
 .agentstat-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 `;
@@ -233,6 +233,8 @@ function BadgeBody({ agent }: { agent: AgentTelemetry }) {
     <>
       <StatusIcon status={agent.status} />
       <span>{formatStatus(agent.status)}</span>
+      {/* Severity in words too, not only color. */}
+      {toneOf(agent) && <span className="agentstat-sr">({toneOf(agent)})</span>}
       {agent.tool !== null && (
         <>
           <span aria-hidden="true">·</span>
