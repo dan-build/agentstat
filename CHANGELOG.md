@@ -35,8 +35,10 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
 - **`useAgentTelemetry(source)`** and small components built on it —
   **`AgentStatusBadge`** ("Waiting · bash · 12s"), **`AnomalyBanner`**,
   **`AgentRoster`** and **`AgentTimeline`**: the chart's event handling and
-  anomaly detection without a canvas, themed like the chart. Tree-shaken
-  away from apps that render only the chart (21.9 KB).
+  anomaly detection without a canvas, themed like the chart, with
+  `onAnomaly` / `onAnomalyEnd` / `onHealthChange` and static `agents` like
+  the chart's. Anomalies are announced to screen readers once each.
+  Tree-shaken away from apps that only render the chart.
 - **`tokens` events take `since`** (same clock as `time`): output that
   arrives as one block after the fact is plotted at its average rate over
   `[since, time]`, and its time from `start` is the TTFT (the whole call if

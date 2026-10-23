@@ -9,7 +9,9 @@ import {
   AgentRoster,
   AgentTimeline,
   type AgentTelemetry,
+  type TelemetryOptions,
 } from '../src/telemetry';
+import { createAgent } from '../src/AgentStat';
 
 const tick = (ms: number) =>
   act(async () => {
@@ -17,7 +19,7 @@ const tick = (ms: number) =>
   });
 
 /** Renders the hook and exposes its latest value. */
-function Probe({ source, onValue, ...opts }: { source: ReturnType<typeof createAgentStream>; onValue: (a: AgentTelemetry[]) => void; anomalyDetection?: boolean }) {
+function Probe({ source, onValue, ...opts }: { source?: ReturnType<typeof createAgentStream>; onValue: (a: AgentTelemetry[]) => void } & TelemetryOptions) {
   onValue(useAgentTelemetry(source, opts));
   return null;
 }
@@ -39,9 +41,31 @@ describe('useAgentTelemetry', () => {
     const c = agents.find((a) => a.id === 'coder')!;
     expect(c).toMatchObject({ status: 'waiting', tool: 'bash', totalTokens: 40 });
     expect(c.statusMs).toBeGreaterThanOrEqual(11_500);
-    expect(c.history.map((h) => h.status)).toEqual(['complete', 'thinking', 'active', 'waiting']);
+    // Created idle and started at the same instant: no zero-length 'complete'.
+    expect(c.history.map((h) => h.status)).toEqual(['waiting']);
     expect(c.history[c.history.length - 1].toMs).toBe(0);
     expect(c.health).not.toBeNull();
+  });
+
+  it('calls back once per anomaly; honours Infinity in the config; takes static agents', async () => {
+    const s = createAgentStream();
+    const onAnomaly = vi.fn();
+    let agents: AgentTelemetry[] = [];
+    const { rerender } = render(
+      <Probe source={s} agents={[createAgent('fixed', 'Fixed')]} onAnomaly={onAnomaly} onValue={(a) => (agents = a)} />
+    );
+    act(() => {
+      s.push('a', { type: 'start' });
+      for (let i = 0; i < 10; i++) s.push('a', { type: 'tokens', count: 5 });
+    });
+    await tick(25_000);
+    expect(agents.map((a) => a.id)).toEqual(['fixed', 'a']);
+    expect(onAnomaly.mock.calls.filter(([id]) => id === 'a').map(([, an]) => an.severity)).toEqual(['warning', 'critical']);
+    rerender(
+      <Probe source={s} agents={[createAgent('fixed', 'Fixed')]} anomalyConfig={{ stallDurationMs: Infinity }} onValue={(a) => (agents = a)} />
+    );
+    await tick(6_000);
+    expect(agents[1].anomalies).toEqual([]); // the rule is off, not on
   });
 
   it('detects anomalies (a stream that dies while active)', async () => {
@@ -92,15 +116,25 @@ describe('components', () => {
     expect(container.querySelector('.agentstat-badge')!.getAttribute('data-theme')).toBe('dark');
   });
 
-  it('AnomalyBanner: nothing without anomalies; alert for critical, status for warnings', () => {
+  it('AnomalyBanner: announces each anomaly once (start, escalation, end), not as its text ticks', () => {
     const { container, rerender } = render(<AnomalyBanner agents={[agent()]} />);
-    expect(container.innerHTML).toBe('');
-    const warn = { kind: 'spike' as const, severity: 'warning' as const, t: 0, message: 'runaway output 90/s', value: 90 };
-    rerender(<AnomalyBanner agents={[agent({ anomalies: [warn] })]} />);
-    expect(container.querySelector('[role="status"]')!.textContent).toContain('Coder');
-    expect(container.textContent).toContain('warning: runaway output 90/s');
-    rerender(<AnomalyBanner agents={[agent({ anomalies: [{ ...warn, severity: 'critical' }] })]} />);
-    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+    const status = () => container.querySelector('[role="status"]')!.textContent;
+    const alert = () => container.querySelector('[role="alert"]')!.textContent;
+    expect(container.querySelector('.agentstat-banner')).toBeNull(); // live regions only
+    expect(status()).toBe('');
+    const stall = (s: number, severity: 'warning' | 'critical' = 'warning') => ({
+      kind: 'stall' as const, severity, t: 0, message: `stalled ${s}s while active`, value: 0,
+    });
+    rerender(<AnomalyBanner agents={[agent({ anomalies: [stall(10)] })]} />);
+    expect(status()).toBe('Coder: stalled 10s while active.');
+    expect(container.querySelector('.agentstat-banner')!.textContent).toContain('warning: stalled 10s');
+    rerender(<AnomalyBanner agents={[agent({ anomalies: [stall(11)] })]} />);
+    expect(status()).toBe('Coder: stalled 10s while active.'); // ticking text isn't re-announced
+    rerender(<AnomalyBanner agents={[agent({ anomalies: [stall(20, 'critical')] })]} />);
+    expect(alert()).toBe('Coder: stalled 20s while active.');
+    rerender(<AnomalyBanner agents={[agent()]} />);
+    expect(status()).toBe('Coder: stall resolved.');
+    expect(container.querySelector('[role="status"].agentstat-banner, .agentstat-banner[role]')).toBeNull();
   });
 
   it('AgentRoster: a row per agent with tabular numbers', () => {
@@ -109,14 +143,18 @@ describe('components', () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].textContent).toContain('1,234');
     expect(rows[1].lastElementChild!.textContent).toBe('–');
+    expect(rows[0].querySelector('th[scope="row"]')!.textContent).toBe('Coder');
     expect(container.querySelector('caption')!.textContent).toBe('Agents');
+    expect(container.querySelectorAll('style')).toHaveLength(1); // not one per badge
   });
 
-  it('AgentTimeline: a segment per status, sized by time, listed for screen readers', () => {
-    const { container } = render(<AgentTimeline agent={agent()} />);
+  it('AgentTimeline: segments sized to the window (empty before the agent existed), listed for screen readers', () => {
+    const { container } = render(<AgentTimeline agent={agent()} windowSeconds={120} />);
     const segs = container.querySelectorAll<HTMLElement>('.agentstat-timeline span');
-    expect([...segs].map((s) => s.dataset.s)).toEqual(['active', 'waiting']);
-    expect(Number(segs[0].style.flexGrow)).toBeCloseTo(47.6 / 60, 2);
+    expect([...segs].map((s) => s.dataset.s ?? 'gap')).toEqual(['gap', 'active', 'waiting']);
+    expect(Number(segs[0].style.flexGrow)).toBeCloseTo(60 / 120, 2);
+    expect(Number(segs[1].style.flexGrow)).toBeCloseTo(47.6 / 120, 2);
+    expect(container.querySelector('ol')!.getAttribute('aria-label')).toBe('Coder status history');
     expect(container.querySelector('ol')!.textContent).toContain('Active for 47s');
   });
 });

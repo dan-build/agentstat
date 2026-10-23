@@ -2,12 +2,12 @@
 // (`useAgentTelemetry`) running the same store, event handling and anomaly
 // detection, and small components built on it.
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AgentStore } from './core/store';
 import { HEALTH_TICK_MS } from './core/constants';
 import { DEFAULT_ANOMALY_CONFIG, type Anomaly, type AnomalyConfig } from './anomaly';
 import type { AgentSource } from './stream';
-import type { AgentStatus } from './types';
+import type { Agent, AgentStatus, HealthMetrics } from './types';
 import { useSourceSubscription } from './ui/useSource';
 import { useMediaQuery } from './ui/hooks';
 import { StatusIcon } from './ui/StatusIcon';
@@ -30,22 +30,34 @@ export type AgentTelemetry = {
   health: number | null;
   /** Anomalies active now (empty with detection off). */
   anomalies: Anomaly[];
-  /** Status history, oldest first: each status and how long ago it began and ended (ms; end 0 = now). */
+  /**
+   * Status history within `historySeconds`, oldest first: each status and
+   * how long ago it began and ended (ms; end 0 = now).
+   */
   history: { status: AgentStatus; fromMs: number; toMs: number }[];
 };
 
 export interface TelemetryOptions {
+  /** Agents known up front (as the chart's `agents` prop); the source adds more. */
+  agents?: Agent[];
   /** Detect stalls, spikes and thrash. Default true. */
   anomalyDetection?: boolean;
   anomalyConfig?: Partial<AnomalyConfig>;
   /** Status history kept for `history` (seconds). Default 300. */
   historySeconds?: number;
+  /** An anomaly started (or escalated) — once, not on every tick. */
+  onAnomaly?: (agentId: string, anomaly: Anomaly) => void;
+  /** An anomaly that was reported has ended. */
+  onAnomalyEnd?: (agentId: string, anomaly: Anomaly) => void;
+  onHealthChange?: (agentId: string, health: HealthMetrics) => void;
 }
 
+const NO_AGENTS: Agent[] = [];
+
 /**
- * Live telemetry for every agent of `source`, updated every half second —
- * what the chart shows, without the chart, for building your own UI (or the
- * components below).
+ * Live telemetry for every agent of `source` (and `options.agents`), updated
+ * every half second — what the chart shows, without the chart, for building
+ * your own UI or the components below.
  *
  * ```tsx
  * const agents = useAgentTelemetry(stream);
@@ -54,17 +66,34 @@ export interface TelemetryOptions {
  */
 export function useAgentTelemetry(source: AgentSource | undefined, options: TelemetryOptions = {}): AgentTelemetry[] {
   const historyMs = (options.historySeconds ?? 300) * 1000;
+  // The store keeps samples for 1.5× its window: a window of 2/3 of the
+  // history keeps exactly the history.
   const [store] = useState(() => new AgentStore([], { windowSeconds: historyMs / 1500, maxHistoryPoints: 10_000 }, 0));
   const [agents, setAgents] = useState<AgentTelemetry[]>([]);
+  // Latest options for the ticking effect, without restarting it.
+  const latest = useRef(options);
+  useEffect(() => {
+    latest.current = options;
+  });
+  useEffect(() => {
+    store.setOptions({ windowSeconds: historyMs / 1500, maxHistoryPoints: 10_000 });
+  }, [store, historyMs]);
+  const roster = options.agents ?? NO_AGENTS;
+  useEffect(() => {
+    store.syncRoster(roster, performance.now());
+  }, [store, roster]);
   useSourceSubscription(store, source);
 
-  const detect = options.anomalyDetection ?? true;
-  const cfgKey = JSON.stringify(options.anomalyConfig ?? {});
   useEffect(() => {
-    const cfg: AnomalyConfig = { ...DEFAULT_ANOMALY_CONFIG, ...(JSON.parse(cfgKey) as Partial<AnomalyConfig>) };
     const tick = () => {
       const now = performance.now();
-      store.healthTick(now, detect, cfg, () => {});
+      const o = latest.current;
+      const cfg: AnomalyConfig = { ...DEFAULT_ANOMALY_CONFIG, ...o.anomalyConfig };
+      store.healthTick(now, o.anomalyDetection ?? true, cfg, (ev) => {
+        if (ev.kind === 'anomaly') o.onAnomaly?.(ev.id, { ...ev.anomaly });
+        else if (ev.kind === 'resolved') o.onAnomalyEnd?.(ev.id, { ...ev.anomaly });
+        else o.onHealthChange?.(ev.id, { ...ev.health });
+      });
       if (typeof document !== 'undefined' && document.hidden) return;
       setAgents(
         store.list.map((r) => {
@@ -81,11 +110,15 @@ export function useAgentTelemetry(source: AgentSource | undefined, options: Tele
             ttftMs: stats?.ttftMs ?? null,
             health: store.getHealth(r.id)?.score ?? null,
             anomalies: store.getAnomalies(r.id),
-            history: changes.map((c, i) => ({
-              status: c.status,
-              fromMs: Math.min(historyMs, now - c.t),
-              toMs: i + 1 < changes.length ? now - changes[i + 1].t : 0,
-            })),
+            history: changes
+              .map((c, i) => ({
+                status: c.status,
+                fromMs: Math.min(historyMs, now - c.t),
+                toMs: i + 1 < changes.length ? now - changes[i + 1].t : 0,
+              }))
+              // A status replaced at the same instant (e.g. created idle, then
+              // started) never held.
+              .filter((h) => h.fromMs > h.toMs),
           };
         })
       );
@@ -93,7 +126,7 @@ export function useAgentTelemetry(source: AgentSource | undefined, options: Tele
     tick();
     const interval = setInterval(tick, HEALTH_TICK_MS);
     return () => clearInterval(interval);
-  }, [store, detect, cfgKey, historyMs]);
+  }, [store, historyMs]);
 
   return agents;
 }
@@ -103,35 +136,39 @@ export function useAgentTelemetry(source: AgentSource | undefined, options: Tele
 const CSS = `
 .agentstat-c{font-family:var(--as-font);color:var(--as-text);font-size:13px;line-height:1.4}
 .agentstat-c *{box-sizing:border-box}
-.agentstat-badge{display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:100%;padding:2px 10px;border-radius:999px;background:var(--as-surface);box-shadow:var(--as-shadow);border:1px solid transparent;color:var(--as-text-secondary);white-space:nowrap}
+.agentstat-badge{display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:100%;min-height:24px;padding:0 10px;border-radius:999px;background:var(--as-surface);box-shadow:var(--as-shadow);border:1px solid transparent;font:500 12px/1 var(--as-font);color:var(--as-text-secondary);white-space:nowrap}
 .agentstat-badge[data-tone="warning"]{color:var(--as-warning)}
 .agentstat-badge[data-tone="critical"]{color:var(--as-critical)}
 .agentstat-badge svg{flex-shrink:0}
-.agentstat-badge-tool{overflow:hidden;text-overflow:ellipsis;min-width:0;color:var(--as-text)}
+.agentstat-badge-tool{overflow:hidden;text-overflow:ellipsis;min-width:0;max-width:16ch;color:var(--as-text)}
 .agentstat-n{font-variant-numeric:tabular-nums}
-.agentstat-banner{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:10px;background:var(--as-surface);box-shadow:var(--as-shadow);border:1px solid transparent}
+.agentstat-banner{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:12px;background:var(--as-surface);box-shadow:var(--as-shadow);border:1px solid transparent}
 .agentstat-banner-row{display:flex;align-items:baseline;gap:8px;min-width:0}
 .agentstat-banner-row[data-tone="warning"] .agentstat-mark{color:var(--as-warning)}
 .agentstat-banner-row[data-tone="critical"] .agentstat-mark{color:var(--as-critical)}
-.agentstat-banner-name{font-weight:500;flex-shrink:0}
-.agentstat-banner-msg{color:var(--as-text-secondary);min-width:0;overflow-wrap:anywhere}
-.agentstat-roster{width:100%;border-collapse:collapse}
+.agentstat-banner-name{font-weight:500;flex-shrink:1;min-width:0;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agentstat-banner-msg{color:var(--as-text-secondary);flex:1;min-width:0;overflow-wrap:break-word}
+.agentstat-roster-wrap{overflow-x:auto}
+.agentstat-roster{width:100%;min-width:520px;border-collapse:collapse;table-layout:fixed}
 .agentstat-roster th{font-size:11px;font-weight:500;letter-spacing:0.05em;text-transform:uppercase;color:var(--as-text-tertiary);text-align:left;padding:4px 8px}
-.agentstat-roster td{padding:6px 8px;border-top:1px solid var(--as-selected);vertical-align:middle}
+.agentstat-roster td,.agentstat-roster tbody th{padding:6px 8px;border-top:1px solid var(--as-selected);vertical-align:middle}
+.agentstat-roster tbody th{font:inherit;font-weight:500;letter-spacing:normal;text-transform:none;color:var(--as-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .agentstat-roster .agentstat-n{text-align:right}
-.agentstat-roster td:first-child{max-width:20ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .agentstat-timeline{display:flex;height:10px;border-radius:999px;overflow:hidden;background:var(--as-selected)}
-.agentstat-timeline span{height:100%;min-width:1px}
-.agentstat-timeline [data-s="active"]{background:oklch(0.66 0.14 155)}
-.agentstat-timeline [data-s="thinking"]{background:oklch(0.64 0.12 255)}
-.agentstat-timeline [data-s="waiting"]{background:var(--as-text-tertiary)}
-.agentstat-timeline [data-s="complete"]{background:transparent}
+.agentstat-timeline span{height:100%;min-width:2px;border-right:2px solid var(--as-bg)}
+.agentstat-timeline span:last-child{border-right:0}
+.agentstat-timeline .agentstat-gap{border-right:0;background:transparent}
+.agentstat-timeline [data-s="active"]{background:var(--as-active)}
+.agentstat-timeline [data-s="thinking"]{background:var(--as-thinking)}
+.agentstat-timeline [data-s="waiting"]{background:repeating-linear-gradient(135deg,var(--as-text-tertiary) 0 3px,transparent 3px 5px)}
+.agentstat-timeline [data-s="complete"]{background:color-mix(in srgb,var(--as-text-tertiary) 30%,transparent)}
 .agentstat-timeline [data-s="stuck"]{background:var(--as-warning)}
-.agentstat-timeline [data-s="hallucinating"]{background:var(--as-critical)}
+.agentstat-timeline [data-s="hallucinating"]{background:repeating-linear-gradient(135deg,var(--as-critical) 0 3px,transparent 3px 5px)}
 .agentstat-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 `;
 
-type Themed = {
+/** Props every component takes. */
+export type TelemetryComponentProps = {
   /** Default 'system' (follows the OS setting). */
   theme?: 'light' | 'dark' | 'system';
   className?: string;
@@ -139,11 +176,13 @@ type Themed = {
 };
 
 /** Root element props: the chart's theme tokens as CSS variables. */
-function useRoot({ theme = 'system', className, style }: Themed, cls: string) {
+function useRoot({ theme = 'system', className, style }: TelemetryComponentProps, cls: string) {
   const systemDark = useMediaQuery('(prefers-color-scheme: dark)', theme === 'system');
   const mode: ThemeMode = theme === 'system' ? (systemDark ? 'dark' : 'light') : theme;
   const t = tokensFor(mode);
+  const dark = mode === 'dark';
   const vars = {
+    '--as-bg': t.bg,
     '--as-surface': t.surface,
     '--as-text': t.text,
     '--as-text-secondary': t.textSecondary,
@@ -152,6 +191,9 @@ function useRoot({ theme = 'system', className, style }: Themed, cls: string) {
     '--as-warning': t.warning,
     '--as-critical': t.critical,
     '--as-shadow': t.shadow,
+    // Timeline statuses: ≥ 3:1 against the track in either theme.
+    '--as-active': dark ? 'oklch(0.70 0.14 155)' : 'oklch(0.50 0.13 155)',
+    '--as-thinking': dark ? 'oklch(0.70 0.12 255)' : 'oklch(0.50 0.14 255)',
     '--as-font': FONT_SANS,
     '--as-font-mono': FONT_MONO,
   } as React.CSSProperties;
@@ -178,12 +220,9 @@ const toneOf = (a: AgentTelemetry): 'warning' | 'critical' | undefined =>
       ? 'warning'
       : undefined;
 
-/** An agent's status in words and icon: "Waiting · bash · 12s". */
-export function AgentStatusBadge({ agent, ...themed }: { agent: AgentTelemetry } & Themed) {
-  const root = useRoot(themed, 'agentstat-badge');
+function BadgeBody({ agent }: { agent: AgentTelemetry }) {
   return (
-    <span {...root} data-tone={toneOf(agent)}>
-      <style>{CSS}</style>
+    <>
       <StatusIcon status={agent.status} />
       <span>{formatStatus(agent.status)}</span>
       {agent.tool !== null && (
@@ -196,49 +235,127 @@ export function AgentStatusBadge({ agent, ...themed }: { agent: AgentTelemetry }
       )}
       <span aria-hidden="true">·</span>
       <span className="agentstat-n">{formatSpan(agent.statusMs)}</span>
+    </>
+  );
+}
+
+/** An agent's status in words and icon: "Waiting · bash · 12s". */
+export function AgentStatusBadge({ agent, ...themed }: { agent: AgentTelemetry } & TelemetryComponentProps) {
+  const root = useRoot(themed, 'agentstat-badge');
+  return (
+    <span {...root} data-tone={toneOf(agent)}>
+      <style>{CSS}</style>
+      <BadgeBody agent={agent} />
     </span>
   );
 }
 
+type Seen = { severity: string; name: string; kind: string };
+
 /**
- * Anomalies active now, one line each ("Coder: stalled 12s while active");
- * nothing when there are none. Critical ones are announced assertively.
+ * Anomalies active now, one line each ("Coder: stalled 12s while active").
+ * Screen readers hear each once — when it starts, escalates or resolves —
+ * not every time its numbers change.
  */
-export function AnomalyBanner({ agents, ...themed }: { agents: AgentTelemetry[] } & Themed) {
+export function AnomalyBanner({ agents, ...themed }: { agents: AgentTelemetry[] } & TelemetryComponentProps) {
   const root = useRoot(themed, 'agentstat-banner');
   const rows = agents.flatMap((a) => a.anomalies.map((x) => ({ a, x })));
-  if (!rows.length) return null;
-  const critical = rows.some((r) => r.x.severity === 'critical');
+  // Announcements, kept apart from the visible list (whose text ticks), in
+  // live regions that are always there. Worked out when the set of anomalies
+  // (or a severity) changes — during render, against the previous set.
+  const key = rows.map(({ a, x }) => `${a.id}:${x.kind}:${x.severity}`).join('|');
+  const [said, setSaid] = useState({ key: '', seen: new Map<string, Seen>(), polite: '', assertive: '' });
+  if (said.key !== key) {
+    const seen = new Map<string, Seen>();
+    const lines: string[] = [];
+    let urgent = false;
+    for (const { a, x } of rows) {
+      const k = `${a.id}:${x.kind}`;
+      seen.set(k, { severity: x.severity, name: a.name, kind: x.kind });
+      const before = said.seen.get(k);
+      if (!before || before.severity !== x.severity) {
+        lines.push(`${a.name}: ${x.message}.`);
+        urgent ||= x.severity === 'critical';
+      }
+    }
+    for (const [k, v] of said.seen) if (!seen.has(k)) lines.push(`${v.name}: ${v.kind} resolved.`);
+    const text = lines.join(' ');
+    setSaid({
+      key,
+      seen,
+      polite: lines.length && !urgent ? text : said.polite,
+      assertive: lines.length && urgent ? text : said.assertive,
+    });
+  }
+  const { polite, assertive } = said;
   return (
-    <div {...root} role={critical ? 'alert' : 'status'}>
-      <style>{CSS}</style>
-      {rows.map(({ a, x }) => (
-        <div key={`${a.id}:${x.kind}`} className="agentstat-banner-row" data-tone={x.severity}>
-          {/* Severity by shape as well as color: ▲ warning, ◆ critical. */}
-          <span className="agentstat-mark" aria-hidden="true">
-            {x.severity === 'critical' ? '◆' : '▲'}
-          </span>
-          <span className="agentstat-banner-name">
-            <bdi>{a.name}</bdi>
-          </span>
-          <span className="agentstat-banner-msg">
-            <span className="agentstat-sr">{x.severity}: </span>
-            {x.message}
-          </span>
+    <>
+      <span className="agentstat-sr" role="status" style={SR}>
+        {polite}
+      </span>
+      <span className="agentstat-sr" role="alert" style={SR}>
+        {assertive}
+      </span>
+      {rows.length > 0 && (
+        <div {...root}>
+          <style>{CSS}</style>
+          {rows.map(({ a, x }) => (
+            <div key={`${a.id}:${x.kind}`} className="agentstat-banner-row" data-tone={x.severity}>
+              {/* Severity by shape as well as color: ▲ warning, ◆ critical. */}
+              <span className="agentstat-mark" aria-hidden="true">
+                {x.severity === 'critical' ? '◆' : '▲'}
+              </span>
+              <span className="agentstat-banner-name" title={a.name}>
+                <bdi>{a.name}</bdi>
+              </span>
+              <span className="agentstat-banner-msg">
+                <span className="agentstat-sr">{x.severity}: </span>
+                {x.message}
+              </span>
+            </div>
+          ))}
         </div>
-      ))}
-    </div>
+      )}
+    </>
   );
 }
 
+// Inline, so the live regions stay hidden before the stylesheet is there.
+const SR: React.CSSProperties = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  margin: -1,
+  padding: 0,
+  overflow: 'hidden',
+  clip: 'rect(0,0,0,0)',
+  whiteSpace: 'nowrap',
+  border: 0,
+};
+
 /** Every agent in a table: status, rate, tokens and health. */
-export function AgentRoster({ agents, ...themed }: { agents: AgentTelemetry[] } & Themed) {
+export function AgentRoster({
+  agents,
+  caption = 'Agents',
+  ...themed
+}: {
+  agents: AgentTelemetry[];
+  /** The table's accessible name (read by screen readers). Default "Agents". */
+  caption?: string;
+} & TelemetryComponentProps) {
   const root = useRoot(themed, 'agentstat-roster-wrap');
   return (
     <div {...root}>
       <style>{CSS}</style>
       <table className="agentstat-roster">
-        <caption className="agentstat-sr">Agents</caption>
+        <caption className="agentstat-sr">{caption}</caption>
+        <colgroup>
+          <col style={{ width: '28%' }} />
+          <col style={{ width: '36%' }} />
+          <col style={{ width: '12%' }} />
+          <col style={{ width: '12%' }} />
+          <col style={{ width: '12%' }} />
+        </colgroup>
         <thead>
           <tr>
             <th scope="col">Agent</th>
@@ -257,11 +374,14 @@ export function AgentRoster({ agents, ...themed }: { agents: AgentTelemetry[] } 
         <tbody>
           {agents.map((a) => (
             <tr key={a.id}>
-              <td title={a.name}>
+              <th scope="row" title={a.name}>
                 <bdi>{a.name}</bdi>
-              </td>
+              </th>
               <td>
-                <AgentStatusBadge agent={a} theme={root['data-theme']} />
+                {/* One stylesheet and theme for the table, not one per badge. */}
+                <span className="agentstat-badge" data-tone={toneOf(a)}>
+                  <BadgeBody agent={a} />
+                </span>
               </td>
               <td className="agentstat-n">{formatRate(a.tokensRate)}</td>
               <td className="agentstat-n">{formatInt(a.totalTokens)}</td>
@@ -275,28 +395,38 @@ export function AgentRoster({ agents, ...themed }: { agents: AgentTelemetry[] } 
 }
 
 /**
- * An agent's status over the last `history` (from `useAgentTelemetry`): one
- * bar, a segment per status. The statuses are also listed for screen
- * readers, and named on hover.
+ * An agent's status over the last `windowSeconds` (default 300; at most the
+ * hook's `historySeconds`): one bar, a segment per status, sized to time, so
+ * stacked timelines line up. Statuses differ by fill pattern as well as
+ * color, are named on hover, and are listed for screen readers.
  */
-export function AgentTimeline({ agent, ...themed }: { agent: AgentTelemetry } & Themed) {
+export function AgentTimeline({
+  agent,
+  windowSeconds = 300,
+  ...themed
+}: { agent: AgentTelemetry; windowSeconds?: number } & TelemetryComponentProps) {
   const root = useRoot(themed, 'agentstat-timeline-wrap');
-  const span = agent.history.length ? agent.history[0].fromMs : 0;
+  const windowMs = Math.max(1, windowSeconds * 1000);
+  const shown = agent.history
+    .map((h) => ({ ...h, fromMs: Math.min(h.fromMs, windowMs) }))
+    .filter((h) => h.fromMs > h.toMs);
+  const before = windowMs - (shown[0]?.fromMs ?? 0);
   return (
     <div {...root}>
       <style>{CSS}</style>
       <div className="agentstat-timeline" aria-hidden="true">
-        {agent.history.map((h, i) => (
+        {before > 0 && <span className="agentstat-gap" style={{ flexGrow: before / windowMs }} />}
+        {shown.map((h, i) => (
           <span
             key={i}
             data-s={h.status}
             title={`${formatStatus(h.status)} · ${formatSpan(h.fromMs - h.toMs)}`}
-            style={{ flexGrow: span ? (h.fromMs - h.toMs) / span : 1 }}
+            style={{ flexGrow: (h.fromMs - h.toMs) / windowMs }}
           />
         ))}
       </div>
-      <ol className="agentstat-sr">
-        {agent.history.map((h, i) => (
+      <ol className="agentstat-sr" aria-label={`${agent.name} status history`}>
+        {shown.map((h, i) => (
           <li key={i}>
             {formatStatus(h.status)} for {formatSpan(h.fromMs - h.toMs)}
           </li>
