@@ -59,6 +59,16 @@
         "default": "./dist/sse.cjs"
       }
     },
+    "./otel": {
+      "import": {
+        "types": "./dist/otel.d.ts",
+        "default": "./dist/otel.js"
+      },
+      "require": {
+        "types": "./dist/otel.d.cts",
+        "default": "./dist/otel.cjs"
+      }
+    },
     "./package.json": "./package.json"
   },
   "typesVersions": {
@@ -74,6 +84,9 @@
       ],
       "sse": [
         "./dist/sse.d.ts"
+      ],
+      "otel": [
+        "./dist/otel.d.ts"
       ]
     }
   },

@@ -172,6 +172,20 @@ describe('connectSse', () => {
     expect(performance.now() - t).toBeLessThan(700);
   });
 
+  it('maps a block’s `since` to this page’s clock too', async () => {
+    vi.stubGlobal('EventSource', FakeEventSource);
+    const s = createAgentStream();
+    const now = performance.now();
+    s.push('a', { type: 'tokens', count: 10, since: now - 2_000 });
+    const { frames } = await drain(await createSseHandler(s)(new Request('http://x/')));
+    const got: AgentStreamMessage[] = [];
+    connectSse('/agents').subscribe((m) => got.push(m));
+    FakeEventSource.last.deliver(frames);
+    const e = got[0].type === 'event' ? got[0].event : null;
+    expect(e!.type === 'tokens' && e!.time! - e!.since!).toBeGreaterThan(1_900);
+    expect(e!.type === 'tokens' && e!.time! - e!.since!).toBeLessThan(2_100);
+  });
+
   it('shares one connection between charts; a late chart gets the history', () => {
     vi.stubGlobal('EventSource', FakeEventSource);
     const src = connectSse('/agents');

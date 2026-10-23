@@ -32,8 +32,12 @@ const instanceOf = (source: AgentSource) => {
   return id;
 };
 
-/** What travels: the message, its event's age when sent (ms), and when it was sent (wall clock). */
-type Wire = { m: AgentStreamMessage; age?: number; sent: number };
+/**
+ * What travels: the message, its event's age when sent (ms) — and the age of
+ * its `since`, which is in the same clock as its time — and when it was sent
+ * (wall clock).
+ */
+type Wire = { m: AgentStreamMessage; age?: number; sinceAge?: number; sent: number };
 
 export interface SseHandlerOptions {
   /** Comment line sent this often (ms) to keep proxies from closing the stream. Default 15 000. */
@@ -120,7 +124,12 @@ export function createSseHandler(
         send('retry: 2000\n\n');
         unsubscribe = src.subscribe((m) => {
           const wire: Wire = { m, sent: Date.now() };
-          if (m.type === 'event' && typeof m.event.time === 'number') wire.age = Math.max(0, clock() - m.event.time);
+          if (m.type === 'event' && typeof m.event.time === 'number') {
+            wire.age = Math.max(0, clock() - m.event.time);
+            if (m.event.type === 'tokens' && typeof m.event.since === 'number') {
+              wire.sinceAge = Math.max(0, clock() - m.event.since);
+            }
+          }
           send(`id: ${instance}:${m.seq}\ndata: ${JSON.stringify(wire)}\n\n`);
         }, after);
         replaying = false;
@@ -221,13 +230,16 @@ export function connectSse(url: string, options: SseSourceOptions = {}): AgentSo
       // jump of seconds is a clock being set, not delay: start over from it.
       const transit = Date.now() - wire.sent;
       if (transit < fastest || transit - fastest > 5_000) fastest = transit;
-      const time = clock() - (wire.age ?? 0) - (transit - fastest);
+      const lag = transit - fastest;
+      const time = clock() - (wire.age ?? 0) - lag;
       // The same event replayed by another instance maps to about the same
       // time (within processing jitter).
       if (time <= skipBefore + 100) return;
       catchingUp = false;
       newest = Math.max(newest, time);
-      local.push(m.id, { ...m.event, time });
+      const event = { ...m.event, time };
+      if (event.type === 'tokens' && wire.sinceAge !== undefined) event.since = clock() - wire.sinceAge - lag;
+      local.push(m.id, event);
     } else if (m.type === 'agent') {
       const { name, color, config } = m;
       local.describe(m.id, { name, color, config });

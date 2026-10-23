@@ -525,6 +525,26 @@ export class AgentStore {
           return bad('a tokens event without a finite count or total');
         }
         if (n === 0) break;
+        const since = typeof e.since === 'number' && Number.isFinite(e.since) ? Math.min(e.since, t) : undefined;
+        if (since !== undefined) {
+          // Output produced over [since, t], reported as one block (a call
+          // reported when it ended): one sample at its average rate. `since`
+          // after the request is when output began: the TTFT; at the request
+          // itself (nothing known earlier), the whole call is.
+          if (s.ttftFrom !== null) {
+            s.ttft = (since > s.ttftFrom ? since : t) - s.ttftFrom;
+            this.ingest(id, { latencyMs: s.ttft }, now);
+          }
+          s.ttftFrom = null;
+          s.total += n;
+          s.win = [];
+          s.lastTok = null;
+          setStatus(s.tools.length ? 'waiting' : 'active', true);
+          rec.current.tokensRate = (n * 1000) / Math.max(SAMPLE_MS, t - since);
+          s.lastSample = t;
+          this._pushSample(rec, t);
+          return;
+        }
         // A gap longer than any rate window is a pause, not streaming.
         if (s.lastTok !== null && t - s.lastTok > RATE_WINDOW_MS[1]) s.lastTok = null;
         // A new stretch: its first chunk was produced over about one

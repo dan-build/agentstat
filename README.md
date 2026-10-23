@@ -234,6 +234,38 @@ the LangGraph subgraph it runs in (each agent of a supervisor or swarm), else
 to `fallback`. An agent called from inside a tool routes by name only if it
 has one; nested teams collapse to the outer team.
 
+### OpenTelemetry
+
+`@dan-build/agentstat/otel` is a span processor for anything instrumented
+with the OpenTelemetry GenAI conventions (no dependency on
+`@opentelemetry/*`; SDK 1.x and 2.x):
+
+```ts
+import { createOtelProcessor } from '@dan-build/agentstat/otel';
+
+const provider = new NodeTracerProvider({
+  spanProcessors: [createOtelProcessor(stream), new BatchSpanProcessor(exporter)],
+});
+```
+
+| `gen_ai.operation.name` | AgentStat |
+|---|---|
+| `chat`, `text_completion`, `generate_content` | a model call: `start` at the span's start; at its end, its output (`gen_ai.usage.output_tokens`, else the text of `gen_ai.output.messages`) at its average rate since the first chunk; then complete — or, if `gen_ai.response.finish_reasons` asks for tools, `waiting` until the agent's next call (apps often run tools without a span) |
+| `execute_tool` | a tool call (`gen_ai.tool.name`): `waiting` |
+| `invoke_agent` | the agent (`gen_ai.agent.name`, else `.id`) that the spans under it belong to; its end completes it. With nothing under it (a remote agent), the span is the agent's run |
+| anything else | structure only: the outermost span's end closes what it left open |
+
+Spans don't stream, so a call shows as one point at its average rate; its
+time to first token comes from `gen_ai.response.time_to_first_chunk` when the
+instrumentation reports it. A span with status ERROR counts an error. A span
+belongs to its own `gen_ai.agent.name`, else its agent span's, else `'agent'`
+(or the `agentId` you pass; a function decides every span). Two concurrent
+invocations of one agent name share its line.
+
+Instrumentations that set `gen_ai.operation.name` work (the official OpenAI
+instrumentation, OpenLLMetry, AI SDK v7's `@ai-sdk/otel`). AI SDK v6 and
+earlier telemetry doesn't set it: use `@dan-build/agentstat/ai-sdk` there.
+
 ### AG-UI
 
 `@dan-build/agentstat/ag-ui` maps AG-UI protocol events (no dependency on
