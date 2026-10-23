@@ -35,6 +35,8 @@ jobs:
       - run: npm run test:dist
       - run: npm run check:size
       - run: npm run check:package
+      # public/r (served from main) must match registry/ sources.
+      - run: node scripts/build-registry.mjs --check
 
   react-18:
     name: React 18

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "agentstat",
+  "homepage": "https://github.com/dan-build/agentstat",
+  "items": [
+    {
+      "name": "agent-status-badge",
+      "type": "registry:component",
+      "title": "Agent status badge",
+      "description": "An agent's live status in words and icon: \"Waiting · bash · 12s\".",
+      "dependencies": [
+        "@dan-build/agentstat@^0.6.0",
+        "lucide-react"
+      ],
+      "registryDependencies": [
+        "badge"
+      ],
+      "files": [
+        {
+          "path": "registry/agentstat/agent-status-badge.tsx",
+          "type": "registry:component"
+        }
+      ],
+      "docs": "Pass agents from useAgentTelemetry(source) (@dan-build/agentstat 0.6 or later): https://github.com/dan-build/agentstat#without-the-chart"
+    },
+    {
+      "name": "anomaly-banner",
+      "type": "registry:component",
+      "title": "Anomaly banner",
+      "description": "Stalls, runaways and thrashing as they happen, announced to screen readers once each.",
+      "dependencies": [
+        "@dan-build/agentstat@^0.6.0",
+        "lucide-react"
+      ],
+      "registryDependencies": [
+        "alert"
+      ],
+      "files": [
+        {
+          "path": "registry/agentstat/anomaly-banner.tsx",
+          "type": "registry:component"
+        }
+      ],
+      "docs": "Pass agents from useAgentTelemetry(source) (@dan-build/agentstat 0.6 or later): https://github.com/dan-build/agentstat#without-the-chart"
+    },
+    {
+      "name": "agent-roster",
+      "type": "registry:component",
+      "title": "Agent roster",
+      "description": "Every agent in a table: status, rate, tokens and health.",
+      "dependencies": [
+        "@dan-build/agentstat@^0.6.0"
+      ],
+      "registryDependencies": [
+        "table",
+        "https://raw.githubusercontent.com/dan-build/agentstat/main/public/r/agent-status-badge.json"
+      ],
+      "files": [
+        {
+          "path": "registry/agentstat/agent-roster.tsx",
+          "type": "registry:component"
+        }
+      ],
+      "docs": "Pass agents from useAgentTelemetry(source) (@dan-build/agentstat 0.6 or later): https://github.com/dan-build/agentstat#without-the-chart"
+    },
+    {
+      "name": "agent-timeline",
+      "type": "registry:component",
+      "title": "Agent timeline",
+      "description": "An agent's status over the last minutes as one bar, sized to time.",
+      "dependencies": [
+        "@dan-build/agentstat@^0.6.0"
+      ],
+      "files": [
+        {
+          "path": "registry/agentstat/agent-timeline.tsx",
+          "type": "registry:component"
+        }
+      ],
+      "docs": "Pass agents from useAgentTelemetry(source) (@dan-build/agentstat 0.6 or later): https://github.com/dan-build/agentstat#without-the-chart"
+    }
+  ]
+}

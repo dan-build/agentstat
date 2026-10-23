@@ -1,0 +1,18 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "agent-timeline",
+  "type": "registry:component",
+  "title": "Agent timeline",
+  "description": "An agent's status over the last minutes as one bar, sized to time.",
+  "dependencies": [
+    "@dan-build/agentstat@^0.6.0"
+  ],
+  "files": [
+    {
+      "path": "registry/agentstat/agent-timeline.tsx",
+      "type": "registry:component",
+      "content": "'use client';\n\nimport { timelineBars, type AgentStatus, type AgentTelemetry } from '@dan-build/agentstat';\nimport { cn } from '@/lib/utils';\n\n// Told apart by pattern as well as color: solid (active, thinking), diagonal\n// hatch (waiting, hallucinating), vertical stripes (stuck), faint (complete).\n// Patterns use currentColor, so they follow a locally scoped dark theme.\nconst HATCH = 'bg-[repeating-linear-gradient(135deg,currentColor_0_3px,transparent_3px_5px)]';\nconst FILL: Record<AgentStatus, string> = {\n  active: 'bg-emerald-700 dark:bg-emerald-400',\n  thinking: 'bg-blue-700 dark:bg-blue-400',\n  waiting: `text-muted-foreground ${HATCH}`,\n  complete: 'bg-muted-foreground/50',\n  stuck:\n    'text-amber-700 dark:text-amber-400 bg-[repeating-linear-gradient(90deg,currentColor_0_3px,transparent_3px_5px)]',\n  hallucinating: `text-destructive ${HATCH}`,\n};\n\nconst LABEL: Record<AgentStatus, string> = {\n  active: 'Active',\n  thinking: 'Thinking',\n  waiting: 'Waiting',\n  complete: 'Complete',\n  stuck: 'Stuck',\n  hallucinating: 'Hallucinating',\n};\n\nconst span = (ms: number) => {\n  const s = Math.max(0, Math.floor(ms / 1000));\n  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;\n};\n\n/**\n * An agent's status over the last `windowSeconds` (at most the hook's\n * `historySeconds`): one bar, a segment per status, sized to time.\n */\nexport function AgentTimeline({\n  agent,\n  windowSeconds = 300,\n  className,\n}: {\n  agent: AgentTelemetry;\n  windowSeconds?: number;\n  className?: string;\n}) {\n  const { before, bars, shown } = timelineBars(agent, windowSeconds);\n  return (\n    <div className={className}>\n      <div\n        aria-hidden=\"true\"\n        className={cn('flex h-2.5 overflow-hidden rounded-full bg-muted', bars.length <= 40 && 'gap-0.5')}\n      >\n        {before > 0 && <span style={{ flexGrow: before }} />}\n        {bars.map((bar, i) => (\n          <span\n            key={i}\n            className={cn('h-full min-w-0', FILL[bar.status])}\n            style={{ flexGrow: bar.share }}\n            title={`${LABEL[bar.status]} · ${span(bar.fromMs - bar.toMs)}`}\n          />\n        ))}\n      </div>\n      <ol className=\"sr-only\" aria-label={`${agent.name} status history`}>\n        {shown.map((h, i) => (\n          <li key={i}>\n            {LABEL[h.status]} for {span(h.fromMs - h.toMs)}\n          </li>\n        ))}\n      </ol>\n    </div>\n  );\n}\n"
+    }
+  ],
+  "docs": "Pass agents from useAgentTelemetry(source) (@dan-build/agentstat 0.6 or later): https://github.com/dan-build/agentstat#without-the-chart"
+}

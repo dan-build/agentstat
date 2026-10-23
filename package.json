@@ -101,18 +101,19 @@
     "dev": "vite",
     "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsup",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.dev.json",
-    "lint": "eslint src tests dev examples",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.dev.json && tsc -p tsconfig.registry.json",
+    "lint": "eslint src tests dev examples registry",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "check:size": "node scripts/check-size.mjs",
     "check:package": "publint --strict && attw --pack . --profile node16",
-    "check": "npm run typecheck && npm run lint && npm test && npm run build && npm run check:size && npm run test:dist",
+    "check": "npm run typecheck && npm run lint && npm test && npm run build && npm run check:size && npm run test:dist && node scripts/build-registry.mjs --check",
     "prepublishOnly": "npm run check",
     "screenshots": "node scripts/screenshots.mjs",
     "test:dist": "vitest run --config vitest.dist.config.ts",
-    "eval:detectors": "node scripts/eval-detectors.mjs"
+    "eval:detectors": "node scripts/eval-detectors.mjs",
+    "build:registry": "node scripts/build-registry.mjs"
   },
   "peerDependencies": {
     "react": ">=18",

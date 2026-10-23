@@ -20,9 +20,10 @@ import { build } from 'esbuild';
 // without wiring; the base for the AI SDK / AG-UI adapters) → unknown
 // progress 22.7 KB (`metric="auto"`: no flat 0% line for agents that never
 // report progress).
-// → telemetry hook + components 25.4 KB for every export together; an app
+// → telemetry hook + components 25.4 KB → 25.5 KB exporting the helpers the
+// shadcn registry components share, for every export together; an app
 // that renders the chart from a stream ships ~22.6 KB (CHART_ONLY_BUDGET).
-const BUDGETS = { 'dist/index.js': 25_500, 'dist/index.cjs': 26_000 };
+const BUDGETS = { 'dist/index.js': 26_000, 'dist/index.cjs': 26_500 };
 // The standalone detectors (detectAnomalies) on their own.
 const TREESHAKE_BUDGET = 2_500;
 

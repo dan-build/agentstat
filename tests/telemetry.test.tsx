@@ -111,7 +111,7 @@ describe('components', () => {
     expect(badge.getAttribute('data-tone')).toBeNull();
     const stall = { kind: 'stall' as const, severity: 'critical' as const, t: 0, message: 'stalled 30s while active', value: 0 };
     rerender(<AgentStatusBadge agent={agent({ status: 'active', tool: null, statusMs: 95_000, anomalies: [stall] })} theme="dark" />);
-    expect(text(container.querySelector('.agentstat-badge')!)).toBe('Active·1m 35s');
+    expect(text(container.querySelector('.agentstat-badge')!)).toBe('Active(critical)·1m 35s');
     expect(container.querySelector('.agentstat-badge')!.getAttribute('data-tone')).toBe('critical');
     expect(container.querySelector('.agentstat-badge')!.getAttribute('data-theme')).toBe('dark');
   });

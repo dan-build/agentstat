@@ -1,0 +1,22 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "agent-roster",
+  "type": "registry:component",
+  "title": "Agent roster",
+  "description": "Every agent in a table: status, rate, tokens and health.",
+  "dependencies": [
+    "@dan-build/agentstat@^0.6.0"
+  ],
+  "registryDependencies": [
+    "table",
+    "https://raw.githubusercontent.com/dan-build/agentstat/main/public/r/agent-status-badge.json"
+  ],
+  "files": [
+    {
+      "path": "registry/agentstat/agent-roster.tsx",
+      "type": "registry:component",
+      "content": "'use client';\n\nimport type { AgentTelemetry } from '@dan-build/agentstat';\nimport { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';\nimport { AgentStatusBadge } from '@/components/agent-status-badge';\n\nconst rate = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });\nconst whole = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });\nconst compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });\n\n/** Every agent in a table: status, rate, tokens and health. */\nexport function AgentRoster({\n  agents,\n  caption = 'Agents',\n  className,\n}: {\n  agents: AgentTelemetry[];\n  /** The table's accessible name. */\n  caption?: string;\n  className?: string;\n}) {\n  return (\n    <Table className={className}>\n      <TableCaption className=\"sr-only\">{caption}</TableCaption>\n      <TableHeader>\n        <TableRow>\n          <TableHead>Agent</TableHead>\n          <TableHead>Status</TableHead>\n          {/* Narrow screens keep agent, status and tokens. */}\n          <TableHead className=\"hidden text-right sm:table-cell\">Rate</TableHead>\n          <TableHead className=\"text-right\">Tokens</TableHead>\n          <TableHead className=\"hidden text-right sm:table-cell\">Health</TableHead>\n        </TableRow>\n      </TableHeader>\n      <TableBody>\n        {agents.map((agent) => (\n          <TableRow key={agent.id}>\n            <TableHead scope=\"row\" className=\"max-w-[20ch] truncate font-medium text-foreground\" title={agent.name}>\n              <bdi>{agent.name}</bdi>\n            </TableHead>\n            <TableCell>\n              <AgentStatusBadge agent={agent} />\n            </TableCell>\n            <TableCell className=\"hidden text-right tabular-nums sm:table-cell\">\n              {rate.format(agent.tokensRate)}&nbsp;t/s\n            </TableCell>\n            <TableCell className=\"text-right tabular-nums\" title={whole.format(agent.totalTokens)}>\n              {agent.totalTokens < 100_000 ? whole.format(agent.totalTokens) : compact.format(agent.totalTokens)}\n            </TableCell>\n            <TableCell className=\"hidden text-right tabular-nums sm:table-cell\">\n              {agent.health === null ? '–' : agent.health}\n            </TableCell>\n          </TableRow>\n        ))}\n      </TableBody>\n    </Table>\n  );\n}\n"
+    }
+  ],
+  "docs": "Pass agents from useAgentTelemetry(source) (@dan-build/agentstat 0.6 or later): https://github.com/dan-build/agentstat#without-the-chart"
+}
