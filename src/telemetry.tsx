@@ -140,7 +140,7 @@ const CSS = `
 .agentstat-badge[data-tone="warning"]{color:var(--as-warning)}
 .agentstat-badge[data-tone="critical"]{color:var(--as-critical)}
 .agentstat-badge svg{flex-shrink:0}
-.agentstat-badge-tool{overflow:hidden;text-overflow:ellipsis;min-width:0;max-width:16ch;color:var(--as-text)}
+.agentstat-badge-tool{overflow:hidden;text-overflow:ellipsis;min-width:4ch;max-width:16ch;color:var(--as-text)}
 .agentstat-n{font-variant-numeric:tabular-nums}
 .agentstat-banner{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:12px;background:var(--as-surface);box-shadow:var(--as-shadow);border:1px solid transparent}
 .agentstat-banner-row{display:flex;align-items:baseline;gap:8px;min-width:0}
@@ -153,11 +153,12 @@ const CSS = `
 .agentstat-roster th{font-size:11px;font-weight:500;letter-spacing:0.05em;text-transform:uppercase;color:var(--as-text-tertiary);text-align:left;padding:4px 8px}
 .agentstat-roster td,.agentstat-roster tbody th{padding:6px 8px;border-top:1px solid var(--as-selected);vertical-align:middle}
 .agentstat-roster tbody th{font:inherit;font-weight:500;letter-spacing:normal;text-transform:none;color:var(--as-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.agentstat-roster .agentstat-n{text-align:right}
-.agentstat-timeline{display:flex;height:10px;border-radius:999px;overflow:hidden;background:var(--as-selected)}
-.agentstat-timeline span{height:100%;min-width:2px;border-right:2px solid var(--as-bg)}
-.agentstat-timeline span:last-child{border-right:0}
-.agentstat-timeline .agentstat-gap{border-right:0;background:transparent}
+.agentstat-roster .agentstat-n{text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agentstat-roster-wrap:focus-visible{outline:2px solid var(--as-text-tertiary);outline-offset:2px;border-radius:4px}
+.agentstat-timeline{display:flex;gap:2px;height:10px;border-radius:999px;overflow:hidden;background:var(--as-selected)}
+.agentstat-timeline[data-dense]{gap:0}
+.agentstat-timeline span{height:100%;min-width:0}
+.agentstat-timeline .agentstat-gap{background:transparent}
 .agentstat-timeline [data-s="active"]{background:var(--as-active)}
 .agentstat-timeline [data-s="thinking"]{background:var(--as-thinking)}
 .agentstat-timeline [data-s="waiting"]{background:repeating-linear-gradient(135deg,var(--as-text-tertiary) 0 3px,transparent 3px 5px)}
@@ -203,6 +204,13 @@ function useRoot({ theme = 'system', className, style }: TelemetryComponentProps
     style: { ...vars, ...style },
   };
 }
+
+let compactNf: Intl.NumberFormat | undefined;
+/** 1,234 · 123K · 98.8B: fits a narrow column. */
+const formatCompact = (v: number) =>
+  Math.abs(v) < 100_000
+    ? formatInt(v)
+    : (compactNf ??= new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })).format(v);
 
 /** "12s", "4m 05s", "1h 02m". */
 const formatSpan = (ms: number) => {
@@ -279,12 +287,14 @@ export function AnomalyBanner({ agents, ...themed }: { agents: AgentTelemetry[] 
       }
     }
     for (const [k, v] of said.seen) if (!seen.has(k)) lines.push(`${v.name}: ${v.kind} resolved.`);
+    // The other region empties, so nothing stale is left to find — and a
+    // repeat of earlier text is still a change, so it's read again.
     const text = lines.join(' ');
     setSaid({
       key,
       seen,
-      polite: lines.length && !urgent ? text : said.polite,
-      assertive: lines.length && urgent ? text : said.assertive,
+      polite: !lines.length ? said.polite : urgent ? '' : text,
+      assertive: !lines.length ? said.assertive : urgent ? text : '',
     });
   }
   const { polite, assertive } = said;
@@ -345,7 +355,8 @@ export function AgentRoster({
 } & TelemetryComponentProps) {
   const root = useRoot(themed, 'agentstat-roster-wrap');
   return (
-    <div {...root}>
+    // Scrolls sideways when narrow: focusable, so the keyboard can scroll it.
+    <div {...root} role="region" aria-label={caption} tabIndex={0}>
       <style>{CSS}</style>
       <table className="agentstat-roster">
         <caption className="agentstat-sr">{caption}</caption>
@@ -383,8 +394,12 @@ export function AgentRoster({
                   <BadgeBody agent={a} />
                 </span>
               </td>
-              <td className="agentstat-n">{formatRate(a.tokensRate)}</td>
-              <td className="agentstat-n">{formatInt(a.totalTokens)}</td>
+              <td className="agentstat-n" title={formatRate(a.tokensRate)}>
+                {formatRate(a.tokensRate)}
+              </td>
+              <td className="agentstat-n" title={formatInt(a.totalTokens)}>
+                {formatCompact(a.totalTokens)}
+              </td>
               <td className="agentstat-n">{a.health === null ? '–' : formatInt(a.health)}</td>
             </tr>
           ))}
@@ -392,6 +407,37 @@ export function AgentRoster({
       </table>
     </div>
   );
+}
+
+// Which status a merged stretch shows: the one that matters most.
+const RANK: Record<AgentStatus, number> = {
+  complete: 0,
+  thinking: 1,
+  active: 2,
+  waiting: 3,
+  stuck: 4,
+  hallucinating: 5,
+};
+
+type Seg = { status: AgentStatus; fromMs: number; toMs: number };
+
+/**
+ * Merge runs of segments shorter than `minMs` (status flapping) into stretches
+ * at least that long, each showing its most important status, so a busy
+ * history still fits its bar and the latest status stays visible.
+ */
+function bucket(segs: Seg[], minMs: number): Seg[] {
+  const out: Seg[] = [];
+  for (const s of segs) {
+    const last = out[out.length - 1];
+    // A short segment joins a bucket that is still short; a long one never
+    // joins (one brief status mustn't recolor a long stretch).
+    if (last && last.fromMs - last.toMs < minMs && s.fromMs - s.toMs < minMs) {
+      last.toMs = s.toMs;
+      if (RANK[s.status] > RANK[last.status]) last.status = s.status;
+    } else out.push({ ...s });
+  }
+  return out;
 }
 
 /**
@@ -411,12 +457,13 @@ export function AgentTimeline({
     .map((h) => ({ ...h, fromMs: Math.min(h.fromMs, windowMs) }))
     .filter((h) => h.fromMs > h.toMs);
   const before = windowMs - (shown[0]?.fromMs ?? 0);
+  const bars = bucket(shown, windowMs / 200);
   return (
     <div {...root}>
       <style>{CSS}</style>
-      <div className="agentstat-timeline" aria-hidden="true">
+      <div className="agentstat-timeline" aria-hidden="true" data-dense={bars.length > 40 ? '' : undefined}>
         {before > 0 && <span className="agentstat-gap" style={{ flexGrow: before / windowMs }} />}
-        {shown.map((h, i) => (
+        {bars.map((h, i) => (
           <span
             key={i}
             data-s={h.status}

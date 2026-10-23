@@ -148,6 +148,43 @@ describe('components', () => {
     expect(container.querySelectorAll('style')).toHaveLength(1); // not one per badge
   });
 
+  it('AgentTimeline: a flapping history fits the bar, worst status shown, latest kept', () => {
+    const history: AgentTelemetry['history'] = [{ status: 'active', fromMs: 300_000, toMs: 150_000 }];
+    for (let i = 0; i < 300; i++) {
+      const from = 150_000 - i * 500;
+      history.push({ status: i % 2 ? 'stuck' : 'active', fromMs: from, toMs: from - 500 });
+    }
+    history.push({ status: 'waiting', fromMs: 0 + 0, toMs: 0 }); // filtered (zero length)
+    history[history.length - 1] = { status: 'waiting', fromMs: 1, toMs: 0 };
+    const { container } = render(<AgentTimeline agent={agent({ history })} />);
+    const segs = [...container.querySelectorAll<HTMLElement>('.agentstat-timeline span')];
+    expect(segs.length).toBeLessThanOrEqual(202);
+    expect(segs[0].dataset.s).toBe('active'); // the long stretch keeps its own status
+    expect(segs.slice(1, -1).every((s) => s.dataset.s === 'stuck')).toBe(true);
+    expect(container.querySelector('.agentstat-timeline')!.hasAttribute('data-dense')).toBe(true);
+  });
+
+  it('AgentRoster: big numbers compact, full value on hover; focusable scroll region', () => {
+    const { container } = render(<AgentRoster agents={[agent({ totalTokens: 98_765_432_109 })]} />);
+    const cell = container.querySelectorAll('tbody td')[2] as HTMLElement;
+    expect(cell.textContent).toMatch(/^98\.8B$/);
+    expect(cell.title).toBe('98,765,432,109');
+    const wrap = container.querySelector('[role="region"]')!;
+    expect(wrap.getAttribute('aria-label')).toBe('Agents');
+    expect(wrap.getAttribute('tabindex')).toBe('0');
+  });
+
+  it('AnomalyBanner: a repeated identical alert is announced again; the other region empties', () => {
+    const stall = { kind: 'stall' as const, severity: 'critical' as const, t: 0, message: 'stalled 20s while active', value: 0 };
+    const { container, rerender } = render(<AnomalyBanner agents={[agent({ anomalies: [stall] })]} />);
+    const alert = () => container.querySelector('[role="alert"]')!.textContent;
+    const first = alert();
+    rerender(<AnomalyBanner agents={[agent()]} />);
+    expect(alert()).toBe(''); // resolved: nothing stale left in the alert
+    rerender(<AnomalyBanner agents={[agent({ anomalies: [stall] })]} />);
+    expect(alert()).toBe(first); // '' → text again: a change, so it's read again
+  });
+
   it('AgentTimeline: segments sized to the window (empty before the agent existed), listed for screen readers', () => {
     const { container } = render(<AgentTimeline agent={agent()} windowSeconds={120} />);
     const segs = container.querySelectorAll<HTMLElement>('.agentstat-timeline span');
