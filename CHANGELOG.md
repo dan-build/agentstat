@@ -32,6 +32,11 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
   `agents` prop's, which keep their names and colors). `describe(id, …)` sets
   a name, color or band; `remove(id)` takes an agent off. One stream can feed
   several charts. `agents` is now optional.
+- **`useAgentTelemetry(source)`** and small components built on it —
+  **`AgentStatusBadge`** ("Waiting · bash · 12s"), **`AnomalyBanner`**,
+  **`AgentRoster`** and **`AgentTimeline`**: the chart's event handling and
+  anomaly detection without a canvas, themed like the chart. Tree-shaken
+  away from apps that render only the chart (21.9 KB).
 - **`tokens` events take `since`** (same clock as `time`): output that
   arrives as one block after the fact is plotted at its average rate over
   `[since, time]`, and its time from `start` is the TTFT (the whole call if

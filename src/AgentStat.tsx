@@ -28,10 +28,11 @@ import type {
   ChartMetric,
   HealthMetrics,
 } from './types';
-import { DEFAULT_CAP, HEALTH_TICK_MS, HIT_RADIUS, PAD, clamp, warnOnce } from './core/constants';
+import { DEFAULT_CAP, HEALTH_TICK_MS, HIT_RADIUS, PAD, clamp } from './core/constants';
 import { emaPoints } from './core/curve';
 import { AgentStore, type RowSnapshot } from './core/store';
 import type { AgentSource } from './stream';
+import { useSourceSubscription } from './ui/useSource';
 import type { AgentRecord } from './core/record';
 import { computeView, pointsFor, primaryBuffer, type View } from './core/view';
 import { ColorResolver } from './core/colors';
@@ -451,51 +452,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
   }, [initialAgents, store, colors]);
 
   // ── Source
-  // Messages this store has applied, so re-subscribing to the same source
-  // (StrictMode, a remount of the effect) doesn't apply history twice.
-  const seenRef = useRef<{ source?: AgentSource; seq: number; changes: number }>({ seq: 0, changes: 0 });
-  useEffect(() => {
-    const seen = seenRef.current;
-    if (!source || typeof source.subscribe !== 'function') {
-      // Source taken away: what it fed goes.
-      if (seen.source) {
-        store.resetSource(performance.now());
-        store.publish();
-      }
-      seen.source = undefined;
-      return;
-    }
-    if (seen.source !== source) {
-      // A different source replays from the start: what the previous one
-      // fed goes first, so nothing is counted twice.
-      if (seen.source) {
-        store.resetSource(performance.now());
-        store.publish();
-        if (++seen.changes === 3) {
-          warnOnce('source-identity', 'The `source` prop changed 3 times; create it once (useAgentStream, or at module scope), not on every render.');
-        }
-      }
-      seen.source = source;
-      seen.seq = 0;
-    }
-    const unsubscribe = source.subscribe((m) => {
-      if (m.seq <= seenRef.current.seq) return;
-      seenRef.current.seq = m.seq;
-      const now = performance.now();
-      const n = store.list.length;
-      if (m.type === 'event') {
-        store.ensure(m.id, m.event.time ?? now, now);
-        store.push(m.id, m.event, now);
-      } else if (m.type === 'agent') {
-        store.describe(m.id, m, now);
-        store.publish();
-      } else {
-        store.removeAuto(m.id);
-      }
-      if (store.list.length !== n) store.publish();
-    }, seenRef.current.seq);
-    return unsubscribe;
-  }, [source, store]);
+  useSourceSubscription(store, source);
 
   // ── Imperative API
   useImperativeHandle(
