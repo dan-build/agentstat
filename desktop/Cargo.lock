@@ -41,6 +41,7 @@ dependencies = [
  "futures",
  "gpui",
  "libc",
+ "objc",
  "serde",
  "serde_json",
 ]
