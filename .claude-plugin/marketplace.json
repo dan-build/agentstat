@@ -1,0 +1,15 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "agentstat",
+  "description": "Live telemetry for your agents.",
+  "owner": { "name": "dan-build", "url": "https://github.com/dan-build" },
+  "plugins": [
+    {
+      "name": "agentstat",
+      "source": "./plugins/agentstat",
+      "description": "Every Claude Code session and subagent, live in AgentStat: turns, tools and their outcomes as they happen.",
+      "category": "monitoring",
+      "homepage": "https://agentstat.sdaniel.cc"
+    }
+  ]
+}

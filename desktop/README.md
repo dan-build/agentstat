@@ -23,16 +23,26 @@ with OpenTelemetry pointed at it (`CLAUDE_CODE_ENABLE_TELEMETRY=1`,
 OTLP/HTTP JSON to `http://127.0.0.1:4318`). Any OpenTelemetry SDK configured
 the same way works; only Claude Code's events are mapped so far.
 
+For live turns and tools (not only tokens), add the Claude Code plugin in
+[`plugins/agentstat`](../plugins/agentstat): `/plugin marketplace add
+dan-build/agentstat`, then `/plugin install agentstat@agentstat`. Its hooks
+report each turn, tool and subagent as it happens; with `run`, telemetry adds
+the token counts, and nothing is counted twice. Sessions are named after their
+project.
+
 The service listens on 127.0.0.1 only and answers only requests addressed to
 localhost:
 
 | Endpoint | |
 |---|---|
 | `POST /v1/logs` | OTLP/HTTP JSON log records. |
+| `POST /v1/hooks/claude` | Claude Code hook input (the plugin posts it). |
 | `GET /v1/agents` | Every agent: status, rate, tokens, tool, health, anomalies. |
 | `GET /v1/stream` | Server-Sent Events in the npm library's format: `connectSse('http://127.0.0.1:4318/v1/stream')` feeds `<AgentStat source>`. |
 
-Prompt and response text is never read or stored.
+Prompt, response and tool text is never stored: the service keeps names, ids
+and timings. `agentstat mcp` is an MCP server (stdio) with one tool,
+`fleet_status`, so an agent can see the others.
 
 ## The app
 

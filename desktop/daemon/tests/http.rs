@@ -52,6 +52,10 @@ fn post_turn(port: u16) {
     assert_eq!(status, 200);
 }
 
+fn body_of(resp: &str) -> &str {
+    body(resp)
+}
+
 fn body(resp: &str) -> &str {
     resp.split_once("\r\n\r\n").map_or("", |(_, b)| b)
 }
@@ -131,6 +135,46 @@ fn the_stream_speaks_the_npm_wire_format_and_resumes() {
 }
 
 #[test]
+fn plugin_hooks_drive_an_agent_named_after_its_project() {
+    let port = start();
+    let host = format!("127.0.0.1:{port}");
+    let post = |body: serde_json::Value| {
+        let (status, _) = request(
+            port,
+            "POST",
+            "/v1/hooks/claude",
+            &host,
+            &[("Content-Type", "application/json")],
+            &body.to_string(),
+        );
+        assert_eq!(status, 204);
+    };
+    let base =
+        |event: &str| serde_json::json!({"session_id": "s-1", "cwd": "/Users/me/code/shop", "hook_event_name": event});
+    let mut pre = base("PreToolUse");
+    pre["tool_name"] = "Bash".into();
+    pre["tool_use_id"] = "toolu_1".into();
+    // A large tool payload is accepted (and dropped): its end must not be lost.
+    pre["tool_input"] = serde_json::json!({"command": "x".repeat(2 * 1024 * 1024)});
+    post(base("SessionStart"));
+    post(base("UserPromptSubmit"));
+    post(pre);
+    let list = || {
+        let (_, resp) = request(port, "GET", "/v1/agents", "localhost", &[], "");
+        serde_json::from_str::<Snapshot>(body(&resp)).unwrap()
+    };
+    let a = &list().agents[0];
+    assert_eq!((a.name.as_str(), a.status.as_str(), a.tool.as_deref()), ("shop", "waiting", Some("Bash")));
+    let mut done = base("PostToolUse");
+    done["tool_name"] = "Bash".into();
+    done["tool_use_id"] = "toolu_1".into();
+    post(done);
+    post(base("Stop"));
+    let a = &list().agents[0];
+    assert_eq!((a.status.as_str(), a.tool.as_deref()), ("complete", None));
+}
+
+#[test]
 fn the_stream_names_its_run_before_any_message() {
     let port = start();
     let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
@@ -141,6 +185,27 @@ fn the_stream_names_its_run_before_any_message() {
     let head = String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase();
     let inst = head.lines().find_map(|l| l.strip_prefix("x-agentstat-instance: ")).expect("instance header");
     assert_eq!(inst.trim().len(), 8);
+}
+
+#[test]
+fn refuses_writes_from_web_pages() {
+    let port = start();
+    let host = format!("127.0.0.1:{port}");
+    let body = r#"{"session_id":"x","hook_event_name":"SessionStart","cwd":"/evil"}"#;
+    // A page's "simple" request (no preflight): text/plain, with an Origin.
+    let (status, _) = request(
+        port,
+        "POST",
+        "/v1/hooks/claude",
+        &host,
+        &[("Content-Type", "text/plain"), ("Origin", "https://evil.example")],
+        body,
+    );
+    assert_eq!(status, 403);
+    let (status, _) = request(port, "POST", "/v1/hooks/claude", &host, &[("Content-Type", "text/plain")], body);
+    assert_eq!(status, 415);
+    let (_, resp) = request(port, "GET", "/v1/agents", "localhost", &[], "");
+    assert!(serde_json::from_str::<Snapshot>(body_of(&resp)).unwrap().agents.is_empty());
 }
 
 #[test]

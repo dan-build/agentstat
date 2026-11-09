@@ -1,0 +1,138 @@
+{
+  "description": "Reports turns, tools and subagents to the local AgentStat service (127.0.0.1 only). Each hook is one local request of a few milliseconds, in order; nothing happens when the service isn't running.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 1 -o /dev/null -H \"Content-Type: application/json\" --data-binary @- \"http://127.0.0.1:${AGENTSTAT_PORT:-4318}/v1/hooks/claude\" || true",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 1 -o /dev/null -H \"Content-Type: application/json\" --data-binary @- \"http://127.0.0.1:${AGENTSTAT_PORT:-4318}/v1/hooks/claude\" || true",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 1 -o /dev/null -H \"Content-Type: application/json\" --data-binary @- \"http://127.0.0.1:${AGENTSTAT_PORT:-4318}/v1/hooks/claude\" || true",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 1 -o /dev/null -H \"Content-Type: application/json\" --data-binary @- \"http://127.0.0.1:${AGENTSTAT_PORT:-4318}/v1/hooks/claude\" || true",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 1 -o /dev/null -H \"Content-Type: application/json\" --data-binary @- \"http://127.0.0.1:${AGENTSTAT_PORT:-4318}/v1/hooks/claude\" || true",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 1 -o /dev/null -H \"Content-Type: application/json\" --data-binary @- \"http://127.0.0.1:${AGENTSTAT_PORT:-4318}/v1/hooks/claude\" || true",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 1 -o /dev/null -H \"Content-Type: application/json\" --data-binary @- \"http://127.0.0.1:${AGENTSTAT_PORT:-4318}/v1/hooks/claude\" || true",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 1 -o /dev/null -H \"Content-Type: application/json\" --data-binary @- \"http://127.0.0.1:${AGENTSTAT_PORT:-4318}/v1/hooks/claude\" || true",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 1 -o /dev/null -H \"Content-Type: application/json\" --data-binary @- \"http://127.0.0.1:${AGENTSTAT_PORT:-4318}/v1/hooks/claude\" || true",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 1 -o /dev/null -H \"Content-Type: application/json\" --data-binary @- \"http://127.0.0.1:${AGENTSTAT_PORT:-4318}/v1/hooks/claude\" || true",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 1 -o /dev/null -H \"Content-Type: application/json\" --data-binary @- \"http://127.0.0.1:${AGENTSTAT_PORT:-4318}/v1/hooks/claude\" || true",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 1 -o /dev/null -H \"Content-Type: application/json\" --data-binary @- \"http://127.0.0.1:${AGENTSTAT_PORT:-4318}/v1/hooks/claude\" || true",
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}
