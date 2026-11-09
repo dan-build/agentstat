@@ -1,0 +1,445 @@
+{
+ "resourceLogs": [
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "claude-code"
+      }
+     },
+     {
+      "key": "service.version",
+      "value": {
+       "stringValue": "2.1.319"
+      }
+     }
+    ]
+   },
+   "scopeLogs": [
+    {
+     "scope": {
+      "name": "com.anthropic.claude_code.events"
+     },
+     "logRecords": [
+      {
+       "timeUnixNano": "1794206324087000000",
+       "observedTimeUnixNano": "1794206324087000000",
+       "body": {
+        "stringValue": "claude_code.user_prompt"
+       },
+       "attributes": [
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "user_prompt"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-11-09T06:38:44.087Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 7
+         }
+        },
+        {
+         "key": "prompt_length",
+         "value": {
+          "stringValue": "70"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-test-session"
+         }
+        }
+       ]
+      },
+      {
+       "timeUnixNano": "1794206324905000000",
+       "observedTimeUnixNano": "1794206324905000000",
+       "body": {
+        "stringValue": "claude_code.api_request"
+       },
+       "attributes": [
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "api_request"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-11-09T06:38:44.905Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 8
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "claude-haiku-5-5"
+         }
+        },
+        {
+         "key": "input_tokens",
+         "value": {
+          "intValue": 1191
+         }
+        },
+        {
+         "key": "output_tokens",
+         "value": {
+          "intValue": 19
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "intValue": 1099
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-test-session"
+         }
+        }
+       ]
+      },
+      {
+       "timeUnixNano": "1794206324906000000",
+       "observedTimeUnixNano": "1794206324906000000",
+       "body": {
+        "stringValue": "claude_code.assistant_response"
+       },
+       "attributes": [
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "assistant_response"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-11-09T06:38:44.906Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 9
+         }
+        },
+        {
+         "key": "response_length",
+         "value": {
+          "intValue": 38
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "claude-haiku-5-5"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-test-session"
+         }
+        }
+       ]
+      },
+      {
+       "timeUnixNano": "1794206326624000000",
+       "observedTimeUnixNano": "1794206326624000000",
+       "body": {
+        "stringValue": "claude_code.tool_decision"
+       },
+       "attributes": [
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "tool_decision"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-11-09T06:38:46.624Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 10
+         }
+        },
+        {
+         "key": "decision",
+         "value": {
+          "stringValue": "accept"
+         }
+        },
+        {
+         "key": "source",
+         "value": {
+          "stringValue": "config"
+         }
+        },
+        {
+         "key": "tool_name",
+         "value": {
+          "stringValue": "Bash"
+         }
+        },
+        {
+         "key": "tool_use_id",
+         "value": {
+          "stringValue": "toolu_test"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-test-session"
+         }
+        }
+       ]
+      },
+      {
+       "timeUnixNano": "1794206326653000000",
+       "observedTimeUnixNano": "1794206326653000000",
+       "body": {
+        "stringValue": "claude_code.api_request"
+       },
+       "attributes": [
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "api_request"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-11-09T06:38:46.653Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 11
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "claude-haiku-5-5"
+         }
+        },
+        {
+         "key": "input_tokens",
+         "value": {
+          "intValue": 2
+         }
+        },
+        {
+         "key": "output_tokens",
+         "value": {
+          "intValue": 91
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "intValue": 2222
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-test-session"
+         }
+        }
+       ]
+      },
+      {
+       "timeUnixNano": "1794206331181000000",
+       "observedTimeUnixNano": "1794206331181000000",
+       "body": {
+        "stringValue": "claude_code.tool_result"
+       },
+       "attributes": [
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "tool_result"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-11-09T06:38:51.181Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 12
+         }
+        },
+        {
+         "key": "tool_name",
+         "value": {
+          "stringValue": "Bash"
+         }
+        },
+        {
+         "key": "tool_use_id",
+         "value": {
+          "stringValue": "toolu_test"
+         }
+        },
+        {
+         "key": "success",
+         "value": {
+          "stringValue": "true"
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "stringValue": "4541"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-test-session"
+         }
+        }
+       ]
+      },
+      {
+       "timeUnixNano": "1794206333222000000",
+       "observedTimeUnixNano": "1794206333222000000",
+       "body": {
+        "stringValue": "claude_code.api_request"
+       },
+       "attributes": [
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "api_request"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-11-09T06:38:53.222Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 13
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "claude-haiku-5-5"
+         }
+        },
+        {
+         "key": "input_tokens",
+         "value": {
+          "intValue": 2
+         }
+        },
+        {
+         "key": "output_tokens",
+         "value": {
+          "intValue": 4
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "intValue": 1479
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-test-session"
+         }
+        }
+       ]
+      },
+      {
+       "timeUnixNano": "1794206333223000000",
+       "observedTimeUnixNano": "1794206333223000000",
+       "body": {
+        "stringValue": "claude_code.assistant_response"
+       },
+       "attributes": [
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "assistant_response"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-11-09T06:38:53.223Z"
+         }
+        },
+        {
+         "key": "event.sequence",
+         "value": {
+          "intValue": 14
+         }
+        },
+        {
+         "key": "response_length",
+         "value": {
+          "intValue": 2
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "claude-haiku-5-5"
+         }
+        },
+        {
+         "key": "session.id",
+         "value": {
+          "stringValue": "00000000-test-session"
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

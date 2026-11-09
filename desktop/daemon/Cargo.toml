@@ -1,0 +1,23 @@
+[package]
+name = "agentstat"
+version = "0.0.0"
+description = "AgentStat's local service and command line: receives agent telemetry, serves it live."
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "agentstat_daemon"
+
+[[bin]]
+name = "agentstat"
+path = "src/main.rs"
+
+[dependencies]
+agentstat-core = { path = "../core" }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-stream = "0.1"

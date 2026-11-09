@@ -83,45 +83,45 @@ mod lenient {
 pub enum Event {
     /// A model request was sent. Status → thinking; starts the TTFT clock.
     Start {
-        #[serde(default, deserialize_with = "lenient::opt")]
+        #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
         time: Option<f64>,
     },
     /// Output arrived: `count` tokens in this chunk, or a running `total`. With
     /// `since`, output produced over [since, time] reported as one block.
     Tokens {
-        #[serde(default, deserialize_with = "lenient::opt")]
+        #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
         count: Option<f64>,
-        #[serde(default, deserialize_with = "lenient::opt")]
+        #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
         total: Option<f64>,
-        #[serde(default, deserialize_with = "lenient::opt")]
+        #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
         since: Option<f64>,
-        #[serde(default, deserialize_with = "lenient::opt")]
+        #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
         time: Option<f64>,
     },
     /// A tool call began (nest freely). Status → waiting while any is open.
     ToolStart {
-        #[serde(default, deserialize_with = "lenient::opt")]
+        #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
         name: Option<String>,
-        #[serde(default, deserialize_with = "lenient::opt")]
+        #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
         time: Option<f64>,
     },
     /// A tool call returned; a truthy `error` also counts an error.
     ToolEnd {
-        #[serde(default, deserialize_with = "lenient::opt")]
+        #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
         name: Option<String>,
-        #[serde(default, deserialize_with = "lenient::truthy")]
+        #[serde(default, deserialize_with = "lenient::truthy", skip_serializing_if = "Option::is_none")]
         error: Option<bool>,
-        #[serde(default, deserialize_with = "lenient::opt")]
+        #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
         time: Option<f64>,
     },
     /// Something failed. Increments the error count.
     Error {
-        #[serde(default, deserialize_with = "lenient::opt")]
+        #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
         time: Option<f64>,
     },
     /// The run finished. Status → complete; open tool calls are closed.
     Finish {
-        #[serde(default, deserialize_with = "lenient::opt")]
+        #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
         time: Option<f64>,
     },
 }
@@ -144,19 +144,19 @@ impl Event {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sample {
-    #[serde(default, deserialize_with = "lenient::opt")]
+    #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
     pub tokens_rate: Option<f64>,
     /// 0–100.
-    #[serde(default, deserialize_with = "lenient::opt")]
+    #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
     pub progress: Option<f64>,
-    #[serde(default, deserialize_with = "lenient::opt")]
+    #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
     pub status: Option<Status>,
-    #[serde(default, deserialize_with = "lenient::opt")]
+    #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
     pub latency_ms: Option<f64>,
     /// The caller's own 0–1 quality signal.
-    #[serde(default, deserialize_with = "lenient::opt")]
+    #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
     pub confidence_score: Option<f64>,
-    #[serde(default, deserialize_with = "lenient::opt")]
+    #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
     pub error_count: Option<f64>,
 }
 
