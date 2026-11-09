@@ -8,3 +8,7 @@ coverage
 # Rust desktop app
 desktop/target/
 fixtures/parity/
+
+# VS Code extension build output
+extensions/vscode/dist/
+extensions/vscode/*.vsix

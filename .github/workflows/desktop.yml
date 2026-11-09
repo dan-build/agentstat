@@ -5,9 +5,9 @@ name: Desktop
 on:
   push:
     branches: [main]
-    paths: ['desktop/**', 'src/**', 'scripts/eval/**', 'scripts/parity/**', '.github/workflows/desktop.yml']
+    paths: ['desktop/**', 'extensions/**', 'src/**', 'scripts/eval/**', 'scripts/parity/**', '.github/workflows/desktop.yml']
   pull_request:
-    paths: ['desktop/**', 'src/**', 'scripts/eval/**', 'scripts/parity/**', '.github/workflows/desktop.yml']
+    paths: ['desktop/**', 'extensions/**', 'src/**', 'scripts/eval/**', 'scripts/parity/**', '.github/workflows/desktop.yml']
 
 permissions:
   contents: read
@@ -52,3 +52,21 @@ jobs:
       - run: cargo fmt -p agentstat-app --check
       - run: cargo clippy -p agentstat-app --all-targets -- -D warnings
       - run: cargo test --release -p agentstat-app
+
+  vscode:
+    name: VS Code extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      # The panel is built from the library's src/, with the repo's dependencies.
+      - run: npm ci
+      - run: npm ci
+        working-directory: extensions/vscode
+      - run: npm run typecheck
+        working-directory: extensions/vscode
+      - run: npm run build
+        working-directory: extensions/vscode

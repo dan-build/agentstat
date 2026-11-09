@@ -1,0 +1,41 @@
+{
+  "name": "agentstat",
+  "displayName": "AgentStat",
+  "description": "Your agents, live: every Claude Code session and anything else reporting to AgentStat, in the status bar and a panel.",
+  "version": "0.1.0",
+  "publisher": "dan-build",
+  "license": "MIT",
+  "homepage": "https://agentstat.sdaniel.cc",
+  "repository": { "type": "git", "url": "https://github.com/dan-build/agentstat", "directory": "extensions/vscode" },
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Visualization", "Other"],
+  "keywords": ["agents", "claude", "monitoring", "telemetry", "ai"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "agentstat.show", "title": "Show Agents", "category": "AgentStat" },
+      { "command": "agentstat.startService", "title": "Start Service", "category": "AgentStat" }
+    ],
+    "configuration": {
+      "title": "AgentStat",
+      "properties": {
+        "agentstat.port": {
+          "type": "number",
+          "default": 4318,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Port of the local AgentStat service (127.0.0.1)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "package": "node build.mjs && npx --yes @vscode/vsce@3 package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/vscode": "~1.85.0"
+  }
+}
