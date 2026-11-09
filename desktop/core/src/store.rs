@@ -740,6 +740,16 @@ impl Store {
         self.index(id).map(|i| &self.agents[i].progress)
     }
 
+    /// An agent's status history (to keep a frozen view's statuses).
+    pub fn status_log(&self, id: &str) -> Option<&StatusLog> {
+        self.index(id).map(|i| &self.agents[i].status_log)
+    }
+
+    /// The status an agent had at time `t` (None before its first one).
+    pub fn status_at(&self, id: &str, t: f64) -> Option<crate::types::Status> {
+        self.index(id).and_then(|i| self.agents[i].status_log.status_at(t))
+    }
+
     pub fn progress_known(&self, id: &str) -> bool {
         self.index(id).is_some_and(|i| self.agents[i].progress_known)
     }
