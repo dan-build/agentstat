@@ -1,0 +1,39 @@
+name: Desktop
+
+# The Rust side (desktop/). Its core must match the TypeScript library, so
+# changes to src/ or the eval scenarios run the parity check too.
+on:
+  push:
+    branches: [main]
+    paths: ['desktop/**', 'src/**', 'scripts/eval/**', 'scripts/parity/**', '.github/workflows/desktop.yml']
+  pull_request:
+    paths: ['desktop/**', 'src/**', 'scripts/eval/**', 'scripts/parity/**', '.github/workflows/desktop.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Core (parity with TypeScript)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+        working-directory: .
+      - run: npm run parity:gen
+        working-directory: .
+      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+      - run: cargo fmt -p agentstat-core --check
+      - run: cargo clippy -p agentstat-core --all-targets -- -D warnings
+      - run: cargo test --release -p agentstat-core

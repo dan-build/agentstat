@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["spike"]
+members = ["core", "spike"]
 
 [workspace.package]
 edition = "2024"
