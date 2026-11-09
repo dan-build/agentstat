@@ -34,6 +34,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentstat-app"
+version = "0.0.0"
+dependencies = [
+ "agentstat-core",
+ "futures",
+ "gpui",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "agentstat-core"
 version = "0.0.0"
 dependencies = [
