@@ -34,8 +34,9 @@ export function Panel({
           <span className="agentstat-name agentstat-secondary" title={r.name}>
             <bdi>{r.name}</bdi>
           </span>
-          <span className="agentstat-num">{formatRate(r.rate)}</span>
-          <span className="agentstat-num">{r.score === null ? '–' : formatInt(r.score)}</span>
+          {/* Per-call agents have no instantaneous rate, and no honest health score. */}
+          <span className="agentstat-num">{r.perCall ? '–' : formatRate(r.rate)}</span>
+          <span className="agentstat-num">{r.score === null || r.perCall ? '–' : formatInt(r.score)}</span>
           <span className="agentstat-status" data-tone={statusTone(r.status)}>
             <StatusIcon status={r.status} />
             {formatStatus(r.status)}

@@ -2,6 +2,21 @@
 
 All notable changes to AgentStat are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Calls reported when they end are drawn as plateaus.** A `tokens` event
+  with `since` (output reported as one block, as Claude Code's telemetry
+  does) now draws at its average rate across the whole call, zero between
+  calls, instead of a needle at its end. Detection and health are unchanged.
+- **Agents that report per call show their tokens, not a rate or a health
+  score**: `AgentRoster` and the chart's panel show "–" for both (an
+  instantaneous rate doesn't exist for them, and a score built on one would
+  mislead). `AgentTelemetry` adds `perCall`.
+  An agent that streams again leaves per-call mode, and its rate returns.
+  (With `metric="both"` the dashed token line still draws per sample.)
+
 ## [0.6.0] — 2026-10-22
 
 ### Changed

@@ -178,6 +178,33 @@ export function drawFrame(
         if (PAD.left + w - sp[sp.length - 1].x < 1.5) sp[sp.length - 1] = t;
         else sp.push(t);
       }
+      // Calls reported when they ended: each a plateau at its average rate over
+      // the call, zero between calls (never a needle at its end).
+      const calls = view.primaryIsTokens ? store.calls.get(rec.id) : undefined;
+      if (calls && calls.length) {
+        const base = primaryToY(0);
+        const shown = calls.filter((c) => c.t >= view.tStart && c.t <= view.tEnd);
+        // From the earlier of the first sample and the first call's start (a
+        // call's end is often the first sample), never stepping back in time.
+        const first = shown.length ? Math.max(view.tStart, shown[0].since) : Infinity;
+        sp.length = 0;
+        sp.push({ x: xOf(Math.max(view.tStart, Math.min(raw[0].t, first))), y: base });
+        const add = (t: number, y: number) => sp.push({ x: Math.max(xOf(t), sp[sp.length - 1].x), y });
+        let prevEnd = -Infinity;
+        for (const c of shown) {
+          const start = Math.max(c.since, prevEnd, view.tStart);
+          if (start >= c.t) continue;
+          const y = primaryToY(c.rate);
+          add(start, base);
+          add(start, y);
+          add(c.t, y);
+          add(c.t, base);
+          prevEnd = c.t;
+        }
+        add(Math.min(lastT, view.tEnd), base);
+        // A call is known only once it ended: never a live tip at "now".
+        live = false;
+      }
       tip = sp[sp.length - 1];
       drewAny = true;
 

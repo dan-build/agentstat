@@ -300,3 +300,26 @@ describe('waiting and stalls', () => {
     expect(detectStall(quiet, 'waiting', 1e9, cfg)).toBeNull();
   });
 });
+
+describe('calls reported when they end', () => {
+  it('keeps each as a block for drawing, and drops old ones', () => {
+    const store = make();
+    store.push('a', { type: 'start', time: T0 + 1_000 }, T0 + 1_000);
+    store.push('a', { type: 'tokens', count: 300, since: T0 + 1_000, time: T0 + 4_000 }, T0 + 4_000);
+    expect(store.calls.get('a')).toEqual([{ since: T0 + 1_000, t: T0 + 4_000, rate: 100 }]);
+    // Older than what's kept: gone on the next call.
+    const late = T0 + 4_000 + store.retentionMs() + 10_000;
+    store.push('a', { type: 'tokens', count: 10, since: late - 1_000, time: late }, late);
+    expect(store.calls.get('a')!.map((c) => c.t)).toEqual([late]);
+  });
+
+  it('an agent that streams again leaves per-call mode', () => {
+    const store = make();
+    store.push('a', { type: 'tokens', count: 300, since: T0 + 1_000, time: T0 + 4_000 }, T0 + 4_000);
+    expect(store.calls.has('a')).toBe(true);
+    store.push('a', { type: 'tokens', count: 5, time: T0 + 5_000 }, T0 + 5_000);
+    store.push('a', { type: 'tokens', count: 5, time: T0 + 5_200 }, T0 + 5_200);
+    expect(store.calls.has('a')).toBe(false);
+  });
+});
+

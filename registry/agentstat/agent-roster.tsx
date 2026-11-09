@@ -8,6 +8,8 @@ const rate = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 const whole = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });
 
+const PER_CALL = 'Reports each call when it ends: see its tokens';
+
 /** Every agent in a table: status, rate, tokens and health. */
 export function AgentRoster({
   agents,
@@ -41,14 +43,15 @@ export function AgentRoster({
             <TableCell>
               <AgentStatusBadge agent={agent} />
             </TableCell>
-            <TableCell className="hidden text-right tabular-nums sm:table-cell">
-              {rate.format(agent.tokensRate)}&nbsp;t/s
+            {/* Agents that report per call (e.g. Claude Code) have no instantaneous rate. */}
+            <TableCell className="hidden text-right tabular-nums sm:table-cell" title={agent.perCall ? PER_CALL : undefined}>
+              {agent.perCall ? '–' : <>{rate.format(agent.tokensRate)}&nbsp;t/s</>}
             </TableCell>
             <TableCell className="text-right tabular-nums" title={whole.format(agent.totalTokens)}>
               {agent.totalTokens < 100_000 ? whole.format(agent.totalTokens) : compact.format(agent.totalTokens)}
             </TableCell>
-            <TableCell className="hidden text-right tabular-nums sm:table-cell">
-              {agent.health === null ? '–' : agent.health}
+            <TableCell className="hidden text-right tabular-nums sm:table-cell" title={agent.perCall ? PER_CALL : undefined}>
+              {agent.health === null || agent.perCall ? '–' : agent.health}
             </TableCell>
           </TableRow>
         ))}

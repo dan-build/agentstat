@@ -91,6 +91,7 @@ const agent = (over: Partial<AgentTelemetry> = {}): AgentTelemetry => ({
   totalTokens: 1_234,
   ttftMs: 800,
   health: 91,
+  perCall: false,
   anomalies: [],
   history: [
     { status: 'active', fromMs: 60_000, toMs: 12_400 },
@@ -135,6 +136,13 @@ describe('components', () => {
     rerender(<AnomalyBanner agents={[agent()]} />);
     expect(status()).toBe('Coder: stall resolved.');
     expect(container.querySelector('[role="status"].agentstat-banner, .agentstat-banner[role]')).toBeNull();
+  });
+
+  it('AgentRoster: per-call agents show tokens, not a rate or a health score', () => {
+    const { container } = render(<AgentRoster agents={[agent({ perCall: true, tokensRate: 0 })]} />);
+    const cells = container.querySelectorAll('tbody td.agentstat-n');
+    expect([...cells].map((c) => c.textContent)).toEqual(['–', '1,234', '–']);
+    expect(cells[0].getAttribute('title')).toMatch(/each call/);
   });
 
   it('AgentRoster: a row per agent with tabular numbers', () => {

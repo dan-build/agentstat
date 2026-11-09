@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   AgentRoster,
+  AgentStat,
   AgentTimeline,
   AnomalyBanner,
   createAgentStream,
@@ -87,6 +88,8 @@ function App() {
       {agents.length > 0 && (
         <>
           <AnomalyBanner agents={agents} theme={theme} />
+          {/* Token rate over the last minute; calls reported when they end are plateaus. */}
+          <AgentStat source={stream} metric="tokens" windowSeconds={60} height={300} theme={theme} />
           <AgentRoster agents={agents} theme={theme} />
           <section className="timelines" aria-label="Status over the last 5 minutes">
             <h2>Last 5 minutes</h2>
