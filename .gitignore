@@ -4,3 +4,7 @@ dist
 *.log
 repomix-output.*
 coverage
+
+# Rust desktop app
+desktop/target/
+fixtures/parity/

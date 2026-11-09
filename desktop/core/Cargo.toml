@@ -1,0 +1,15 @@
+[package]
+name = "agentstat-core"
+version = "0.0.0"
+description = "AgentStat's telemetry logic: event ingest, status, rates, health and anomaly detection. No I/O."
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+libm = "0.2"
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# float_roundtrip: parse the TypeScript traces' numbers exactly.
+serde_json = { version = "1", features = ["float_roundtrip"] }

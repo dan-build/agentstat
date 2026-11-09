@@ -113,6 +113,7 @@
     "screenshots": "node scripts/screenshots.mjs",
     "test:dist": "vitest run --config vitest.dist.config.ts",
     "eval:detectors": "node scripts/eval-detectors.mjs",
+    "parity:gen": "node scripts/parity/generate.mjs",
     "build:registry": "node scripts/build-registry.mjs"
   },
   "peerDependencies": {
