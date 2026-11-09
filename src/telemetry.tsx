@@ -28,6 +28,11 @@ export type AgentTelemetry = {
   ttftMs: number | null;
   /** 0–100, or null before the first health tick. */
   health: number | null;
+  /**
+   * Reports each call when it ends (e.g. Claude Code): no instantaneous rate,
+   * and a health score built on one would mislead, so components show neither.
+   */
+  perCall: boolean;
   /** Anomalies active now (empty with detection off). */
   anomalies: Anomaly[];
   /**
@@ -109,6 +114,7 @@ export function useAgentTelemetry(source: AgentSource | undefined, options: Tele
             totalTokens: stats?.totalTokens ?? 0,
             ttftMs: stats?.ttftMs ?? null,
             health: store.getHealth(r.id)?.score ?? null,
+            perCall: store.calls.has(r.id),
             anomalies: store.getAnomalies(r.id),
             history: changes
               .map((c, i) => ({
@@ -356,6 +362,8 @@ const SR: React.CSSProperties = {
   border: 0,
 };
 
+const PER_CALL_TITLE = 'Reports each call when it ends: see its tokens';
+
 /** Every agent in a table: status, rate, tokens and health. */
 export function AgentRoster({
   agents,
@@ -407,13 +415,15 @@ export function AgentRoster({
                   <BadgeBody agent={a} />
                 </span>
               </td>
-              <td className="agentstat-n" title={formatRate(a.tokensRate)}>
-                {formatRate(a.tokensRate)}
+              <td className="agentstat-n" title={a.perCall ? PER_CALL_TITLE : formatRate(a.tokensRate)}>
+                {a.perCall ? '–' : formatRate(a.tokensRate)}
               </td>
               <td className="agentstat-n" title={formatInt(a.totalTokens)}>
                 {formatCompact(a.totalTokens)}
               </td>
-              <td className="agentstat-n">{a.health === null ? '–' : formatInt(a.health)}</td>
+              <td className="agentstat-n" title={a.perCall ? PER_CALL_TITLE : undefined}>
+                {a.health === null || a.perCall ? '–' : formatInt(a.health)}
+              </td>
             </tr>
           ))}
         </tbody>

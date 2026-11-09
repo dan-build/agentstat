@@ -54,7 +54,12 @@ export type RowSnapshot = {
   status: AgentStatus;
   rate: number;
   score: number | null;
+  /** Reports each call when it ends (no instantaneous rate, no health score). */
+  perCall: boolean;
 };
+
+/** Output reported as one block when a call ended: drawn at its average rate. */
+export type CallBlock = { since: number; t: number; rate: number };
 
 /** Emitted by a health tick, in order, for the component to act on. */
 export type StoreEvent =
@@ -126,6 +131,7 @@ const sameRows = (a: RowSnapshot[], b: RowSnapshot[]) =>
       p.visible === b[i].visible &&
       p.status === b[i].status &&
       p.score === b[i].score &&
+      p.perCall === b[i].perCall &&
       Math.abs(p.rate - b[i].rate) < 0.05
   );
 
@@ -138,6 +144,13 @@ export class AgentStore {
   readonly status = new Map<string, StatusLog>();
   readonly live = new Map<string, LiveValues>();
   readonly anomalies = new Map<string, Anomaly[]>();
+  /**
+   * Calls reported when they ended (a `tokens` event with `since`), for
+   * drawing only: the renderer shows each as a plateau at its average rate
+   * over the call, instead of one sample at its end. Detection and health
+   * don't read it.
+   */
+  readonly calls = new Map<string, CallBlock[]>();
   /** Agents that have reported progress (otherwise it's unknown, not 0%). */
   readonly progressKnown = new Set<string>();
   /** Sticky token-axis ceiling, recomputed at most 4×/s by the view. */
@@ -350,6 +363,7 @@ export class AgentStore {
     this._sourced.delete(id);
     this.progressKnown.delete(id);
     this._streams.delete(id);
+    this.calls.delete(id);
     this._sim.delete(id);
   }
 
@@ -543,6 +557,13 @@ export class AgentStore {
           rec.current.tokensRate = (n * 1000) / Math.max(SAMPLE_MS, t - since);
           s.lastSample = t;
           this._pushSample(rec, t);
+          const calls = this.calls.get(id) ?? [];
+          calls.push({ since, t, rate: rec.current.tokensRate });
+          const keepFrom = t - this.retentionMs();
+          let drop = 0;
+          while (drop < calls.length && calls[drop].t < keepFrom) drop++;
+          if (drop) calls.splice(0, drop);
+          this.calls.set(id, calls);
           return;
         }
         // A gap longer than any rate window is a pause, not streaming.
@@ -558,6 +579,9 @@ export class AgentStore {
           // The second chunk shows the real gap: re-anchor the stretch on it.
           s.from = s.lastTok - clamp(t - s.lastTok, SAMPLE_MS, RATE_WINDOW_MS[1]);
         }
+        // Streaming output: this agent is no longer reporting per call (its
+        // calls give way to the drawn rate, and the rate is real again).
+        this.calls.delete(id);
         s.win.push(t, n);
         s.total += n;
         if (s.ttftFrom !== null) {
@@ -919,6 +943,7 @@ export class AgentStore {
       // (background tabs), and a readout must not lag behind the data.
       rate: r.current.tokensRate,
       score: this._health.get(r.id)?.score ?? null,
+      perCall: this.calls.has(r.id),
     }));
   }
 
