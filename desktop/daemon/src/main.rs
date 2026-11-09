@@ -22,6 +22,7 @@ Usage:
       Starts the service in the background if it isn't running. Options go
       before the command; everything after it is the command's own.
   agentstat watch [--port N]     Live table of every agent (Ctrl-C to quit).
+  agentstat mcp [--port N]       MCP server (stdio) so an agent can read the fleet.
   agentstat status [--port N]    Print the table once.
   agentstat serve [--port N]     Run the service in the foreground.
 
@@ -71,6 +72,7 @@ fn main() -> ExitCode {
         "run" => run(port, rest),
         "watch" => watch(port),
         "status" => status(port),
+        "mcp" => mcp(port),
         "-V" | "--version" => {
             println!("agentstat {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -157,6 +159,8 @@ fn run(port: u16, args: &[String]) -> ExitCode {
         .env("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json")
         .env("OTEL_EXPORTER_OTLP_ENDPOINT", &endpoint)
         .env("OTEL_EXPORTER_OTLP_COMPRESSION", "none")
+        // The AgentStat plugin's hooks post to the same service.
+        .env("AGENTSTAT_PORT", port.to_string())
         // Events in about a second, not the SDK default of five.
         .env("OTEL_LOGS_EXPORT_INTERVAL", "1000")
         .env("OTEL_METRIC_EXPORT_INTERVAL", "10000")
@@ -219,6 +223,72 @@ fn table(snap: &Snapshot) -> String {
         }
     }
     out
+}
+
+/// A minimal MCP server over stdio (newline-delimited JSON-RPC): one tool,
+/// `fleet_status`, returning the same table as `agentstat status`.
+fn mcp(port: u16) -> ExitCode {
+    use serde_json::{Value, json};
+    use std::io::BufRead;
+    let stdin = std::io::stdin();
+    let mut out = std::io::stdout();
+    for line in stdin.lock().lines() {
+        let Ok(line) = line else { break };
+        let mut reply = |v: Value| writeln!(out, "{v}").and_then(|_| out.flush());
+        let Ok(req) = serde_json::from_str::<Value>(&line) else {
+            if reply(json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": "parse error" } }))
+                .is_err()
+            {
+                break;
+            }
+            continue;
+        };
+        if req.is_array() {
+            if reply(json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32600, "message": "batches aren't supported" } }))
+                .is_err()
+            {
+                break;
+            }
+            continue;
+        }
+        // Notifications (no id) and the client's own responses (no method) get no reply.
+        let (Some(id), Some(method)) = (req.get("id").cloned(), req.get("method").and_then(Value::as_str)) else {
+            continue;
+        };
+        let result = match method {
+            "initialize" => Ok(json!({
+                // The client's version when it's one this server speaks; else the newest it does.
+                "protocolVersion": req["params"]["protocolVersion"]
+                    .as_str()
+                    .filter(|v| ["2025-06-18", "2025-03-26", "2024-11-05"].contains(v))
+                    .unwrap_or("2025-06-18"),
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": "agentstat", "version": env!("CARGO_PKG_VERSION") },
+            })),
+            "ping" => Ok(json!({})),
+            "tools/list" => Ok(json!({ "tools": [{
+                "name": "fleet_status",
+                "description": "Every agent AgentStat sees on this machine (Claude Code sessions and \
+                    subagents, and anything else reporting to it): status and for how long, output \
+                    tokens, the tool running, health, active anomalies, and recent anomalies.",
+                "inputSchema": { "type": "object", "properties": {} },
+            }]})),
+            "tools/call" if req["params"]["name"] == "fleet_status" => Ok(match fetch(port) {
+                Ok(snap) => json!({ "content": [{ "type": "text", "text": table(&snap) }] }),
+                Err(e) => json!({ "content": [{ "type": "text", "text": e }], "isError": true }),
+            }),
+            "tools/call" => Err((-32602, "unknown tool")),
+            _ => Err((-32601, "method not found")),
+        };
+        let message = match result {
+            Ok(r) => json!({ "jsonrpc": "2.0", "id": id, "result": r }),
+            Err((code, msg)) => json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": msg } }),
+        };
+        if reply(message).is_err() {
+            break;
+        }
+    }
+    ExitCode::SUCCESS
 }
 
 fn status(port: u16) -> ExitCode {

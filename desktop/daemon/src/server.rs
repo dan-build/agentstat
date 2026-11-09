@@ -37,6 +37,10 @@ const IDLE_REMOVE_MS: f64 = 30.0 * 60_000.0;
 const RECENT_ANOMALIES: usize = 50;
 /// Largest OTLP request accepted (exporters send small batches).
 const MAX_BODY: usize = 512 * 1024;
+/// Largest hook call accepted: it carries the tool's whole input and output
+/// (read and dropped; only names and ids are kept), and a lost tool end would
+/// leave the agent "waiting" forever.
+const MAX_HOOK_BODY: usize = 16 * 1024 * 1024;
 /// Live streams served at once.
 const MAX_STREAMS: usize = 16;
 static STREAMS: AtomicUsize = AtomicUsize::new(0);
@@ -111,6 +115,12 @@ impl Daemon {
             n += self.emit(out, now);
         }
         n
+    }
+
+    /// Ingest one Claude Code hook call; returns how many events it produced.
+    pub fn ingest_hook(&mut self, body: &Value, now: f64) -> usize {
+        let out = self.claude.map_hook(body, now);
+        self.emit(out, now)
     }
 
     /// Send mapper output to the stream and the store; returns the event count.
@@ -222,6 +232,7 @@ pub fn router(state: Shared, port: u16) -> Router {
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/logs", post(logs))
+        .route("/v1/hooks/claude", post(hook).layer(DefaultBodyLimit::max(MAX_HOOK_BODY)))
         // Accepted so exporters configured for every signal don't error; not read yet.
         .route("/v1/metrics", post(|| async { Json(serde_json::json!({})) }))
         .route("/v1/traces", post(|| async { Json(serde_json::json!({})) }))
@@ -232,12 +243,25 @@ pub fn router(state: Shared, port: u16) -> Router {
         .with_state(state)
 }
 
-/// Refuse any Host that isn't this machine (DNS rebinding).
+/// Refuse any Host that isn't this machine (DNS rebinding), and any write from
+/// a web page: browsers mark those with Origin, and a page can only send JSON
+/// after a preflight this service never approves.
 async fn local_only(req: Request, next: Next, port: u16) -> Response {
     let host = req.headers().get(header::HOST).and_then(|h| h.to_str().ok()).unwrap_or("");
     let ok = ["127.0.0.1", "localhost", "[::1]"].iter().any(|h| host == *h || host == format!("{h}:{port}"));
     if !ok {
         return (StatusCode::FORBIDDEN, "agentstat only answers requests for localhost").into_response();
+    }
+    if req.method() == axum::http::Method::POST {
+        if req.headers().contains_key(header::ORIGIN) {
+            return (StatusCode::FORBIDDEN, "agentstat doesn't accept data from web pages").into_response();
+        }
+        let ctype = req.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
+        let json = ctype.to_ascii_lowercase().starts_with("application/json");
+        let protobuf = ctype.to_ascii_lowercase().starts_with("application/x-protobuf");
+        if !json && !protobuf {
+            return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "send application/json").into_response();
+        }
     }
     next.run(req).await
 }
@@ -258,6 +282,16 @@ async fn logs(State(state): State<Shared>, headers: HeaderMap, body: Bytes) -> R
     };
     state.lock().unwrap_or_else(|e| e.into_inner()).ingest_logs(&v, now_ms());
     Json(serde_json::json!({})).into_response()
+}
+
+/// A Claude Code hook (the AgentStat plugin posts each one's JSON input).
+async fn hook(State(state): State<Shared>, body: Bytes) -> Response {
+    let Ok(v) = serde_json::from_slice::<Value>(&body) else {
+        return (StatusCode::BAD_REQUEST, "invalid JSON").into_response();
+    };
+    state.lock().unwrap_or_else(|e| e.into_inner()).ingest_hook(&v, now_ms());
+    // An empty 2xx: nothing for Claude Code to act on.
+    StatusCode::NO_CONTENT.into_response()
 }
 
 async fn agents(State(state): State<Shared>) -> Json<Snapshot> {

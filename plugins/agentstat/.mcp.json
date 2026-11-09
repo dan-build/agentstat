@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "agentstat": {
+      "command": "agentstat",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}
