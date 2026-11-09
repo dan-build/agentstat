@@ -131,6 +131,19 @@ fn the_stream_speaks_the_npm_wire_format_and_resumes() {
 }
 
 #[test]
+fn the_stream_names_its_run_before_any_message() {
+    let port = start();
+    let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    write!(s, "GET /v1/stream HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n").unwrap();
+    let mut buf = [0u8; 2048];
+    let n = s.read(&mut buf).unwrap();
+    let head = String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase();
+    let inst = head.lines().find_map(|l| l.strip_prefix("x-agentstat-instance: ")).expect("instance header");
+    assert_eq!(inst.trim().len(), 8);
+}
+
+#[test]
 fn refuses_other_hosts_and_protobuf() {
     let port = start();
     let (status, _) = request(port, "GET", "/v1/agents", "evil.example", &[], "");

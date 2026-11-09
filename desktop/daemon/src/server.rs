@@ -323,6 +323,7 @@ async fn stream(State(state): State<Shared>, headers: HeaderMap, Query(q): Query
             .unwrap_or(0);
         (d.instance.clone(), d.log.subscribe(after, now_ms()))
     };
+    let instance_header = instance.clone();
     let (tx, rx) = mpsc::channel::<Result<Bytes, Infallible>>(64);
     tokio::spawn(async move {
         let _slot = slot;
@@ -356,6 +357,8 @@ async fn stream(State(state): State<Shared>, headers: HeaderMap, Query(q): Query
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache, no-transform")
         .header("x-accel-buffering", "no")
+        // Which run this is, before any message: a client can tell a restart at once.
+        .header("x-agentstat-instance", instance_header)
         .body(Body::from_stream(ReceiverStream::new(rx)))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
