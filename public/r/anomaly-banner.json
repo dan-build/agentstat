@@ -5,7 +5,7 @@
   "title": "Anomaly banner",
   "description": "Stalls, runaways and thrashing as they happen, announced to screen readers once each.",
   "dependencies": [
-    "@dan-build/agentstat@^0.6.0",
+    "@dan-build/agentstat@^0.7.0",
     "lucide-react"
   ],
   "registryDependencies": [
