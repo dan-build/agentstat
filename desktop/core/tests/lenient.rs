@@ -22,3 +22,12 @@ fn event_fields_are_lenient() {
     assert_eq!(e, Event::Tokens { count: None, total: Some(40.0), since: None, time: None });
     assert!(serde_json::from_str::<Event>(r#"{"type":"teleport"}"#).is_err());
 }
+
+#[test]
+fn absent_fields_stay_absent_when_serialized() {
+    // The TypeScript side reads `typeof time === 'number'`: a null would mean "now".
+    let e = Event::Tokens { count: Some(5.0), total: None, since: None, time: Some(12.5) };
+    assert_eq!(serde_json::to_string(&e).unwrap(), r#"{"type":"tokens","count":5.0,"time":12.5}"#);
+    let e = Event::ToolEnd { name: Some("bash".into()), error: None, time: None };
+    assert_eq!(serde_json::to_string(&e).unwrap(), r#"{"type":"tool-end","name":"bash"}"#);
+}

@@ -95,6 +95,11 @@ fn main() -> std::io::Result<()> {
         let mut body = vec![0; len];
         reader.read_exact(&mut body)?;
         println!("{path} ({ctype}, {len} bytes)");
+        if let Ok(dir) = std::env::var("DUMP_DIR") {
+            static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let _ = std::fs::write(format!("{dir}/{n:03}{}.json", path.replace('/', "-")), &body);
+        }
         match serde_json::from_slice::<Value>(&body) {
             Ok(v) => show(&path, &v),
             Err(_) => println!("  not JSON (set OTEL_EXPORTER_OTLP_PROTOCOL=http/json)"),

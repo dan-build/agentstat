@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   core:
-    name: Core (parity with TypeScript)
+    name: Core and service
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -34,6 +34,7 @@ jobs:
       - run: npm run parity:gen
         working-directory: .
       - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
-      - run: cargo fmt -p agentstat-core --check
-      - run: cargo clippy -p agentstat-core --all-targets -- -D warnings
-      - run: cargo test --release -p agentstat-core
+      - run: cargo fmt -p agentstat-core -p agentstat --check
+      - run: cargo clippy -p agentstat-core -p agentstat --all-targets -- -D warnings
+      # Core: parity with TypeScript. Service: OTLP in, agent list and SSE out.
+      - run: cargo test --release -p agentstat-core -p agentstat
