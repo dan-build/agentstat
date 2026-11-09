@@ -41,7 +41,8 @@ jobs:
 
   app:
     name: App (macOS, Apple Silicon)
-    runs-on: macos-14
+    # The current Apple Silicon image (pinned versions get retired).
+    runs-on: macos-latest
     defaults:
       run:
         working-directory: desktop
