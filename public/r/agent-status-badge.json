@@ -5,7 +5,7 @@
   "title": "Agent status badge",
   "description": "An agent's live status in words and icon: \"Waiting · bash · 12s\".",
   "dependencies": [
-    "@dan-build/agentstat@^0.6.0",
+    "@dan-build/agentstat@^0.7.0",
     "lucide-react"
   ],
   "registryDependencies": [

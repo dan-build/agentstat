@@ -2,7 +2,7 @@
 
 All notable changes to AgentStat are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.7.0] — 2026-11-09
 
 ### Changed
 
@@ -16,6 +16,8 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
   mislead). `AgentTelemetry` adds `perCall`.
   An agent that streams again leaves per-call mode, and its rate returns.
   (With `metric="both"` the dashed token line still draws per sample.)
+- The shadcn registry components now require `@dan-build/agentstat@^0.7.0`
+  (the roster reads `perCall`).
 
 ## [0.6.0] — 2026-10-22
 
