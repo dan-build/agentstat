@@ -7,6 +7,7 @@ pub mod claude;
 pub mod client;
 pub mod otlp;
 pub mod server;
+pub mod setup;
 pub mod stream;
 
 /// Default port: the standard OTLP/HTTP one, so OpenTelemetry exporters need

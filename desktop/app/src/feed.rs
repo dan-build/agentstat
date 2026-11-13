@@ -52,11 +52,14 @@ fn agentstat_binary() -> Option<PathBuf> {
     if sibling.is_file() {
         return Some(sibling);
     }
-    std::env::var_os("PATH")?
-        .to_str()?
-        .split(':')
-        .chain(std::iter::once(concat!(env!("HOME"), "/.cargo/bin")))
-        .map(|d| PathBuf::from(d).join("agentstat"))
+    // Apps opened from Finder get a minimal PATH, so also look where the
+    // installers put it (read at run time: the build machine's HOME is no use).
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path)
+        .chain(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from))
+        .chain(home.iter().flat_map(|h| [h.join(".local/bin"), h.join(".cargo/bin")]))
+        .map(|d| d.join("agentstat"))
         .find(|p| p.is_file())
 }
 

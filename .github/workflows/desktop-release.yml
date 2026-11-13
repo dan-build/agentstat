@@ -1,0 +1,155 @@
+name: Desktop release
+
+# Builds the macOS app and CLI (universal, ad-hoc signed) and drafts a GitHub
+# release on an `app-v*` tag. There is no Apple Developer ID or notarization:
+# trust comes from SHA256SUMS and GitHub artifact attestations. Run it by hand
+# (workflow_dispatch) for a dry run that only uploads workflow artifacts.
+on:
+  push:
+    tags: ['app-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MACOSX_DEPLOYMENT_TARGET: '12.0'
+
+jobs:
+  build:
+    name: Build (universal macOS)
+    # Apple Silicon image; the x86_64 half is cross-compiled.
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read workspace version
+        id: version
+        run: |
+          v=$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version *= *"\(.*\)"/\1/p;}' Cargo.toml)
+          [ -n "$v" ] || { echo "::error::no workspace version in desktop/Cargo.toml"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Tag matches workspace version
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ "$TAG" != "app-v$VERSION" ]; then
+            echo "::error::tag $TAG does not match workspace version $VERSION (expected app-v$VERSION)"
+            exit 1
+          fi
+
+      - run: rustup toolchain install stable --profile minimal --target aarch64-apple-darwin --target x86_64-apple-darwin && rustup default stable
+
+      - name: Build both architectures
+        run: |
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release --locked -p agentstat -p agentstat-app --target "$t"
+          done
+
+      - name: Universal binaries
+        run: |
+          mkdir -p build
+          for b in agentstat agentstat-app; do
+            lipo -create -output "build/$b" \
+              "target/aarch64-apple-darwin/release/$b" \
+              "target/x86_64-apple-darwin/release/$b"
+            lipo -info "build/$b"
+          done
+
+      - name: Bundle, sign (ad-hoc) and checksum
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          APP_BIN=build/agentstat-app CLI_BIN=build/agentstat \
+            ARCH_LABEL=universal OUT_DIR=dist packaging/bundle.sh
+          cp packaging/install.sh dist/install.sh
+          (cd dist && shasum -a 256 "AgentStat-$VERSION-macos-universal.dmg" \
+            "agentstat-$VERSION-macos-universal.tar.gz" install.sh > SHA256SUMS)
+          packaging/render-homebrew.sh "$VERSION" dist dist
+          cat dist/SHA256SUMS
+
+      - name: Smoke test (universal)
+        # The shipped (signed) binary, from the tarball users download.
+        run: |
+          set -eu
+          mkdir -p smoke
+          tar -xzf dist/agentstat-*-macos-universal.tar.gz -C smoke
+          cli=smoke/agentstat
+          "$cli" --version
+          "$cli" serve --port 4399 &
+          pid=$!
+          ok=0
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS http://127.0.0.1:4399/healthz; then ok=1; break; fi
+            sleep 1
+          done
+          kill "$pid" || true
+          [ "$ok" = 1 ] || { echo "::error::/healthz did not answer"; exit 1; }
+
+      - name: Smoke test (x86_64 under Rosetta)
+        run: |
+          set -eu
+          if ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+            echo "Rosetta is not available on this runner; skipping."
+            exit 0
+          fi
+          arch -x86_64 smoke/agentstat --version
+
+      - name: Smoke test (bundle layout)
+        run: |
+          set -eu
+          mnt=$(mktemp -d)
+          hdiutil attach -quiet -nobrowse -readonly -mountpoint "$mnt" dist/AgentStat-*-macos-universal.dmg
+          codesign --verify --strict "$mnt/AgentStat.app"
+          "$mnt/AgentStat.app/Contents/MacOS/agentstat" --version
+          test -x "$mnt/AgentStat.app/Contents/MacOS/agentstat-app"
+          hdiutil detach -quiet "$mnt"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release
+          path: desktop/dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Attest and draft release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release
+          path: dist
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.dmg
+            dist/*.tar.gz
+            dist/install.sh
+
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh release create "$TAG" --repo "$REPO" --draft --verify-tag \
+            --title "AgentStat app ${TAG#app-v}" \
+            --notes "Ad-hoc signed, not notarized. Verify downloads against SHA256SUMS or with \`gh attestation verify <file> --repo $REPO\`." \
+            dist/*.dmg dist/*.tar.gz dist/SHA256SUMS dist/install.sh dist/agentstat.rb dist/agentstat-app.rb
