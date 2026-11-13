@@ -19,6 +19,11 @@ thrashing. One canvas, about 17 KB min+gzip, no dependencies besides React.
 
 ---
 
+> **Running coding agents?** AgentStat also comes as a small macOS app with a
+> command line: every Claude Code session and subagent on your machine, live —
+> which one is working, which one waits on a tool, which one has stalled.
+> [Get the app →](#the-macos-app)
+
 ## Quick start
 
 ```bash
@@ -559,6 +564,69 @@ Omit `color` on agents to use the palette, which switches with the theme.
 ## Browser support
 
 Evergreen browsers from 2022 on: Chrome/Edge 94+, Firefox 93+, Safari 15.4+.
+
+## The macOS app
+
+A native app and an `agentstat` command for watching the agents on your own
+machine: Claude Code sessions and their subagents today, anything that speaks
+OpenTelemetry through `agentstat run`. macOS 12 or later, Apple Silicon and Intel.
+
+```bash
+curl -fsSL https://github.com/dan-build/agentstat/releases/download/app-v0.1.0/install.sh | sh -s -- --app
+agentstat connect claude
+```
+
+The installer checks every file against the release's checksums before
+installing, puts `agentstat` in `~/.local/bin`, and with `--app` puts
+AgentStat.app in `~/Applications`.
+
+`agentstat connect claude` lists what it will change, and changes nothing
+until you say yes:
+
+1. Start the service at login (a launchd job, 127.0.0.1 only).
+2. Install the AgentStat plugin for Claude Code: turns, tools and subagents as
+   they happen.
+3. Point Claude Code's telemetry at the service: tokens and cost per call.
+   If its telemetry already goes somewhere else, that's left alone.
+
+`agentstat doctor` checks the whole chain. `agentstat disconnect claude` and
+`agentstat service uninstall` undo it. `agentstat watch` is a live table in the
+terminal; `agentstat --help` lists the rest.
+
+### Verify, don't trust
+
+AgentStat isn't notarized by Apple, on purpose: there's no company or
+personal identity behind it to vouch for it. So every claim here is one you
+can check yourself.
+
+**Built in the open.** GitHub Actions builds each release from a tagged
+commit in this repository and signs a record of where every file came from.
+Check a download against it, and against the release's checksums:
+
+```bash
+gh attestation verify AgentStat-0.1.0-macos-universal.dmg --repo dan-build/agentstat
+grep macos-universal.dmg SHA256SUMS | shasum -a 256 -c
+```
+
+**Stays on your machine.** The service listens on 127.0.0.1 only, sends
+nothing anywhere, and never stores prompt or response text. Check it while
+it runs — every connection you'll see is between 127.0.0.1 addresses:
+
+```bash
+lsof -nP -iTCP -sTCP:LISTEN -a -c agentstat   # listens on 127.0.0.1 only
+lsof -nP -iTCP -a -c agentstat                # and talks to nothing else
+```
+
+**Or build it yourself** (Rust, no Xcode needed):
+
+```bash
+git clone https://github.com/dan-build/agentstat && cd agentstat/desktop
+cargo build --release -p agentstat -p agentstat-app
+```
+
+**Opening the app.** Installed with the script above, it opens like any
+other app. If you download the `.dmg` in a browser instead, macOS asks once:
+open System Settings → Privacy & Security and choose Open Anyway.
 
 ## Documentation
 

@@ -22,7 +22,7 @@ dependencies = [
 
 [[package]]
 name = "agentstat"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "agentstat-core",
  "axum",
@@ -35,7 +35,7 @@ dependencies = [
 
 [[package]]
 name = "agentstat-app"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "agentstat-core",
  "futures",
@@ -48,7 +48,7 @@ dependencies = [
 
 [[package]]
 name = "agentstat-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "libm",
  "serde",

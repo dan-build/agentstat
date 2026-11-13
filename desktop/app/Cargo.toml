@@ -1,6 +1,6 @@
 [package]
 name = "agentstat-app"
-version = "0.0.0"
+version.workspace = true
 description = "The AgentStat desktop app: every agent on this machine, live."
 edition.workspace = true
 license.workspace = true

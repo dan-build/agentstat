@@ -4,6 +4,9 @@
 //!   agentstat watch              live table of every agent
 //!   agentstat status             the table once
 //!   agentstat serve              run the service in the foreground
+//!   agentstat connect claude     set Claude Code up to report here (asks first)
+//!   agentstat service install    start the service at login
+//!   agentstat doctor             check that everything is in place
 
 use std::io::Write;
 use std::os::unix::process::CommandExt;
@@ -11,10 +14,17 @@ use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
 use agentstat_daemon::server::Snapshot;
-use agentstat_daemon::{DEFAULT_PORT, client};
+use agentstat_daemon::{DEFAULT_PORT, client, setup};
 
 const HELP: &str = "\
 agentstat — live telemetry for your coding agents
+
+Get started:
+  agentstat connect claude       Set Claude Code up to report here: starts the
+                                 service at login, installs the AgentStat plugin,
+                                 points its telemetry here. Shows every change
+                                 and asks first (--yes to skip, --dry-run to look).
+  agentstat doctor               Check that everything is in place.
 
 Usage:
   agentstat run [--port N] [--] <command> [args…]
@@ -25,6 +35,9 @@ Usage:
   agentstat mcp [--port N]       MCP server (stdio) so an agent can read the fleet.
   agentstat status [--port N]    Print the table once.
   agentstat serve [--port N]     Run the service in the foreground.
+  agentstat service install|uninstall|status
+                                 Start the service at login (launchd), or stop.
+  agentstat disconnect claude    Undo `connect claude` (asks first).
 
 The service listens on 127.0.0.1 only (default port 4318, or $AGENTSTAT_PORT).
 ";
@@ -48,6 +61,11 @@ fn main() -> ExitCode {
     };
     // Options come right after the command. For `run`, the program begins at the
     // first other argument (or after `--`), and everything from there is its own.
+    // Setup commands take one word (`connect claude`, `service install`) and
+    // --yes / --dry-run, anywhere after the command.
+    let takes_word = matches!(cmd.as_str(), "connect" | "disconnect" | "service");
+    let mut word: Option<&str> = None;
+    let mut confirm = setup::Confirm::default();
     let mut i = 0;
     while i < rest.len() {
         match rest[i].as_str() {
@@ -63,6 +81,18 @@ fn main() -> ExitCode {
                 break;
             }
             _ if cmd == "run" => break,
+            "-y" | "--yes" if takes_word => {
+                confirm.yes = true;
+                i += 1;
+            }
+            "--dry-run" if takes_word => {
+                confirm.dry_run = true;
+                i += 1;
+            }
+            w if takes_word && word.is_none() && !w.starts_with('-') => {
+                word = Some(w);
+                i += 1;
+            }
             other => return fail(&format!("unexpected argument `{other}` (see `agentstat --help`)")),
         }
     }
@@ -73,6 +103,10 @@ fn main() -> ExitCode {
         "watch" => watch(port),
         "status" => status(port),
         "mcp" => mcp(port),
+        "connect" => setup::connect(word, port, confirm),
+        "disconnect" => setup::disconnect(word, port, confirm),
+        "service" => setup::service(word, port, confirm),
+        "doctor" => setup::doctor(port),
         "-V" | "--version" => {
             println!("agentstat {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -98,6 +132,12 @@ fn serve(port: u16) -> ExitCode {
     eprintln!("agentstat: listening on http://127.0.0.1:{port}");
     match rt.block_on(agentstat_daemon::server::serve(port)) {
         Ok(()) => ExitCode::SUCCESS,
+        // Another copy already serves (the app's, or one started by hand): that's
+        // the job done, and a clean exit keeps launchd from restarting this one.
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && client::is_up(port) => {
+            eprintln!("agentstat: already running on port {port}");
+            ExitCode::SUCCESS
+        }
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
             fail(&format!("port {port} is in use (another agentstat or an OpenTelemetry collector?); try --port"))
         }

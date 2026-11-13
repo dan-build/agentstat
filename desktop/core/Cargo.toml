@@ -1,6 +1,6 @@
 [package]
 name = "agentstat-core"
-version = "0.0.0"
+version.workspace = true
 description = "AgentStat's telemetry logic: event ingest, status, rates, health and anomaly detection. No I/O."
 edition.workspace = true
 license.workspace = true
