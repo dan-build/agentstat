@@ -67,9 +67,9 @@ export interface AgentContext {
   waitingOn?: string;
   /**
    * Status changes covering the samples (the first entry gives the status at
-   * the start). Output while `thinking` doesn't count toward the usual peak:
-   * a reasoning trickle isn't the agent's norm, so its first real burst isn't
-   * a spike.
+   * the start). A reasoning trickle while `thinking` then isn't the norm for
+   * the agent's real output, so its first real burst isn't a spike; while it
+   * is still thinking, all of its output counts, so a runaway is caught.
    */
   statusLog?: StatusChange[];
 }
@@ -369,8 +369,8 @@ function afterIdleSpike(
  *
  * Judging against the usual *peak* keeps bursty but healthy agents quiet, and
  * using only active samples means resuming after a pause (of any length) is
- * never a spike. Output while `thinking` (from `ctx.statusLog`) is left out
- * too. Nothing is judged until the active baseline holds
+ * never a spike. With `ctx.statusLog`, output while `thinking` doesn't define
+ * the norm unless the agent is still thinking. Nothing is judged until the active baseline holds
  * `spikeMinSamples` samples over at least 3 s, so a start-up ramp isn't
  * mistaken for the norm.
  *
@@ -393,7 +393,10 @@ export function detectSpike(
   // Sparse telemetry: the recent window always spans a few samples.
   const recentMs = Math.max(RECENT_MS, 2.5 * typicalGap(tokens));
   const idleCutoff = activeCutoff(tokens, cfg, ctx);
-  // Which samples were taken while `thinking`: not part of the agent's norm.
+  // Output while `thinking` (a reasoning trickle) isn't the norm for an
+  // agent that is producing now, so its first real burst isn't a spike.
+  // While it is still thinking, its peak is judged against all its output,
+  // so a runaway then is still caught.
   const log = ctx?.statusLog ?? [];
   let j = 0;
   let st: AgentStatus | undefined;
@@ -401,6 +404,7 @@ export function detectSpike(
     while (j < log.length && log[j].t <= s.t) st = log[j++].status;
     return st === 'thinking';
   });
+  const thinkingNow = st === 'thinking';
   let peakNorm: number;
   if (episode?.baseline !== undefined) {
     // An open episode keeps the baseline it opened against, so a sustained
@@ -416,7 +420,7 @@ export function detectSpike(
     tokens.forEach((s, i) => {
       if (s.t < baseStart || s.t >= baseEnd) return;
       total++;
-      if (s.v > idleCutoff && !thinking[i]) {
+      if (s.v > idleCutoff && !(thinking[i] && !thinkingNow)) {
         baseline.push(s.v);
         if (s.t < firstT) firstT = s.t;
         lastT = s.t;

@@ -430,10 +430,11 @@ status current (including `complete` when an agent is idle):
 - **Requests that differ a lot in speed** (one run at 80 t/s, the next at
   150) can briefly read as a runaway after a pause.
 - **Report thinking.** Output while `thinking` (a reasoning trickle) isn't
-  counted as the agent's normal rate, so its first real burst isn't a
-  runaway. `push` sets `thinking` from `start` to the first token. A slow
-  phase reported as `active` (above `spikeMinBaselineRate`, 1 t/s) becomes
-  the norm, and the first burst after it can be flagged.
+  taken as the agent's normal rate, so the first real burst after it isn't
+  a runaway. `push` sets `thinking` from `start` or the end of a tool
+  call to the next token. A slow phase reported as `active` (above
+  `spikeMinBaselineRate`, 1 t/s) becomes the norm, and the first burst after
+  it can be flagged.
 - **A runaway from the first seconds** has no normal rate to compare with,
   so it isn't flagged until the agent has a history.
 - **Tool-call loops** that only alternate working states aren't flagged as

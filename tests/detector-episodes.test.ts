@@ -67,4 +67,11 @@ describe('detector episodes through the store', () => {
     expect(spike?.at).toBeGreaterThanOrEqual(60);
     expect(spike?.at).toBeLessThan(65);
   });
+
+  it('still catches a runaway while the agent keeps reporting thinking', () => {
+    const ev = replay((t) => (t >= 40 ? 120 : 20), 70, () => 'thinking');
+    const spike = ev.find((e) => e.kind === 'anomaly' && e.anomaly.kind === 'spike');
+    expect(spike?.at).toBeGreaterThanOrEqual(40);
+    expect(spike?.at).toBeLessThan(45);
+  });
 });

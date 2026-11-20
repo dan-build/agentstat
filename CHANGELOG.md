@@ -10,8 +10,10 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
   agent that started with a reasoning trickle (status `thinking`) had that
   trickle taken as its normal rate, so its first real output was flagged as
   a runaway, and the alert could stay open. Output while `thinking` no
-  longer counts toward the agent's usual peak, its slow reference rate or
-  the climbing-output check. On a fresh, independently written evaluation
+  longer defines the usual peak, the climbing-output check or the slow
+  reference rate of an agent that is producing. While the agent is still
+  thinking, its peak is judged against all of its output, so a runaway
+  then is still caught. On a fresh, independently written evaluation
   set (27 scenarios, now in `npm run eval:detectors` as `holdout3`),
   precision rose from 51.6% to 61.5% and false alarms fell from 5.1 to 3.4
   per agent-hour, with recall unchanged; every earlier set is unchanged.
