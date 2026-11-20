@@ -2,6 +2,15 @@
 
 All notable changes to AgentStat are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [SemVer](https://semver.org/).
 
+## [0.7.1] — 2026-11-20
+
+### Fixed
+
+- **Anomaly labels stay inside the plot on narrow charts.** A marker whose
+  label fit on neither side of it used to run over the y-axis labels (seen
+  on phone-width charts). The label is now pinned inside the plot, and
+  shortened with "…" only when the plot is narrower than the label.
+
 ## [0.7.0] — 2026-11-09
 
 ### Changed

@@ -112,6 +112,30 @@ const wave = (ref: AgentStatRef, i: number) => {
   ref.updateAgent('c', { tokensRate: i < 25 ? 10 : 0, progress: Math.min(i, 25), status: 'active' });
 };
 
+describe('anomaly marker labels', () => {
+  // A 360 px chart: the plot is 256 px wide (52 px axis gutters each side).
+  it('stay inside the plot, off the axis labels, on a narrow chart', async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0, y: 0, left: 0, top: 0, right: 360, bottom: 300, width: 360, height: 300,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const frame = (await scene(
+      { metric: 'tokens', windowSeconds: 10, anomalyDetection: true, anomalyConfig: { stallDurationMs: 2000 } },
+      wave
+    )) as string[];
+    const i = frame.findIndex((c) => c.startsWith('fillText("Coder · stalled'));
+    expect(i).toBeGreaterThan(-1);
+    const m = /^fillText\((".*"), ([\d.-]+), /.exec(frame[i])!;
+    const text = JSON.parse(m[1]) as string;
+    const x = Number(m[2]);
+    const align = [...frame.slice(0, i)].reverse().find((c) => c.startsWith('set textAlign'));
+    expect(align).toBe('set textAlign("left")');
+    // The recorder measures 6 px per character.
+    expect(x).toBeGreaterThanOrEqual(52);
+    expect(x + text.length * 6).toBeLessThanOrEqual(360 - 52);
+  });
+});
+
 describe('renderer snapshots', () => {
   it('progress metric with a reference line', async () => {
     const frame = await scene({ metric: 'progress', referenceLine: { value: 50, label: 'Target' } }, wave);
