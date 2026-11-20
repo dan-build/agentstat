@@ -620,7 +620,10 @@ impl Store {
                 // Slow reference of the active rate (time constant ~5 min).
                 let mut sum = 0.0;
                 let mut n = 0.0;
-                for p in a.tokens.since(now - step) {
+                // Thinking output (a reasoning trickle) isn't the agent's active rate.
+                let fresh =
+                    if a.agent.current.status == Status::Thinking { Vec::new() } else { a.tokens.since(now - step) };
+                for p in fresh {
                     if p.v > cfg.stall_rate_threshold {
                         sum += p.v;
                         n += 1.0;
@@ -644,6 +647,7 @@ impl Store {
                     status_since: Some(a.status_since),
                     work_since: Some(a.work_since),
                     waiting_on: a.stream.as_ref().and_then(|s| s.tools.last()).filter(|t| !t.is_empty()).cloned(),
+                    status_log: a.status_log.transitions_in_range(now - retain, now),
                 };
                 found = detect_anomalies(&tokens, &changes, a.agent.current.status, now, cfg, &open, &ctx);
                 a.anomalies = found.clone();

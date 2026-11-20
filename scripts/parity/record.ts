@@ -16,6 +16,7 @@ import { ADVERSARIAL } from '../eval/adversarial';
 import { HOLDOUT } from '../eval/holdout';
 import { EVENTS } from '../eval/events';
 import { HOLDOUT2 } from '../eval/holdout2';
+import { HOLDOUT3 } from '../eval/holdout3';
 
 const T0 = 10_000;
 
@@ -85,5 +86,6 @@ export function recordAll() {
     ...HOLDOUT.map((sc) => record(sc, 'holdout')),
     ...EVENTS.map((sc) => record(sc, 'events')),
     ...HOLDOUT2.map((sc) => record(sc, 'holdout2')),
+    ...HOLDOUT3.map((sc) => record(sc, 'holdout3')),
   ];
 }
