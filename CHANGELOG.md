@@ -2,6 +2,15 @@
 
 All notable changes to AgentStat are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **A pinned anomaly label shows the severity shape.** When a label is pinned
+  inside the plot it covers its own marker, so severity showed by color
+  alone. A pinned label now starts with the shape (▲ warning, ◆ critical)
+  and the covered marker is no longer drawn.
+
 ## [0.7.1] — 2026-11-20
 
 ### Fixed

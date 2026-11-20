@@ -114,7 +114,7 @@ const wave = (ref: AgentStatRef, i: number) => {
 
 describe('anomaly marker labels', () => {
   // A 360 px chart: the plot is 256 px wide (52 px axis gutters each side).
-  it('stay inside the plot, off the axis labels, on a narrow chart', async () => {
+  it('stay inside the plot, off the axis labels, and keep the shape when pinned, on a narrow chart', async () => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockReturnValue({
       x: 0, y: 0, left: 0, top: 0, right: 360, bottom: 300, width: 360, height: 300,
       toJSON: () => ({}),
@@ -123,7 +123,8 @@ describe('anomaly marker labels', () => {
       { metric: 'tokens', windowSeconds: 10, anomalyDetection: true, anomalyConfig: { stallDurationMs: 2000 } },
       wave
     )) as string[];
-    const i = frame.findIndex((c) => c.startsWith('fillText("Coder · stalled'));
+    // Pinned over its own marker, the label leads with the marker's shape.
+    const i = frame.findIndex((c) => /^fillText\("[▲◆] Coder · stalled/.test(c));
     expect(i).toBeGreaterThan(-1);
     const m = /^fillText\((".*"), ([\d.-]+), /.exec(frame[i])!;
     const text = JSON.parse(m[1]) as string;
