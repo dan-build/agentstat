@@ -317,39 +317,41 @@ export function drawFrame(
     ctx.setLineDash([]);
 
     const my = PAD.top + 8 + i * 16;
-    ctx.fillStyle = col;
-    ctx.strokeStyle = tk.bg;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    if (critical) {
-      ctx.moveTo(m.x, my - 4.5);
-      ctx.lineTo(m.x + 4.5, my);
-      ctx.lineTo(m.x, my + 4.5);
-      ctx.lineTo(m.x - 4.5, my);
-    } else {
-      ctx.moveTo(m.x, my - 4.5);
-      ctx.lineTo(m.x + 4.5, my + 3.5);
-      ctx.lineTo(m.x - 4.5, my + 3.5);
-    }
-    ctx.closePath();
-    ctx.stroke();
-    ctx.fill();
-
     let label = `${m.name} · ${m.anomaly.message}`;
     ctx.font = `500 11px ${FONT_SANS}`;
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
     // The label stays inside the plot, off the axis labels: right of the
-    // marker, else left of it, else pinned to whichever edge it reaches;
-    // shortened only when the plot is narrower than the label.
+    // marker, else left of it, else pinned to whichever edge it reaches.
+    // A pinned label covers the marker, so it leads with the shape itself,
+    // and is shortened only when the plot is narrower than the label.
     let tw = ctx.measureText(label).width;
-    while (tw > w && label.length > 1) tw = ctx.measureText((label = label.slice(0, -2) + '…')).width;
-    const lx =
-      m.x + 9 + tw <= PAD.left + w
-        ? m.x + 9
-        : m.x - 9 - tw >= PAD.left
-          ? m.x - 9 - tw
-          : Math.max(PAD.left, PAD.left + w - tw);
+    let lx = m.x + 9 + tw <= PAD.left + w ? m.x + 9 : m.x - 9 - tw >= PAD.left ? m.x - 9 - tw : -1;
+    if (lx < 0) {
+      tw = ctx.measureText((label = (critical ? '◆ ' : '▲ ') + label)).width;
+      while (tw > w && label.length > 1) tw = ctx.measureText((label = label.slice(0, -2) + '…')).width;
+      lx = Math.max(PAD.left, PAD.left + w - tw);
+    } else {
+      // The marker's shape (a pinned label carries it instead).
+      ctx.fillStyle = col;
+      ctx.strokeStyle = tk.bg;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      if (critical) {
+        ctx.moveTo(m.x, my - 4.5);
+        ctx.lineTo(m.x + 4.5, my);
+        ctx.lineTo(m.x, my + 4.5);
+        ctx.lineTo(m.x - 4.5, my);
+      } else {
+        ctx.moveTo(m.x, my - 4.5);
+        ctx.lineTo(m.x + 4.5, my + 3.5);
+        ctx.lineTo(m.x - 4.5, my + 3.5);
+      }
+      ctx.closePath();
+      ctx.stroke();
+      ctx.fill();
+    }
+
     // A background-colored halo keeps the label legible over lines.
     ctx.lineWidth = 3;
     ctx.lineJoin = 'round';
