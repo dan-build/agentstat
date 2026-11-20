@@ -7,6 +7,8 @@
 
 **See when your AI agents stall, run away or thrash — live.**
 
+[Live demo](https://agentstat.sdaniel.cc/) · [Docs](https://agentstat.sdaniel.cc/docs/overview/) · [macOS app](#the-macos-app) · [Changelog](./CHANGELOG.md)
+
 AgentStat watches agents while they run and says, in plain words, when one has
 stopped producing while it still claims to be working, when its output runs
 away, or when its status keeps flipping. It comes in two forms:
@@ -650,7 +652,8 @@ open System Settings → Privacy & Security and choose Open Anyway.
 ## Documentation
 
 - [Overview](https://agentstat.sdaniel.cc/docs/overview/)
-- [Real data integration](https://agentstat.sdaniel.cc/docs/real-data-integration/)
+- [macOS app and command line](https://agentstat.sdaniel.cc/docs/macos-app/)
+- [Integrations](https://agentstat.sdaniel.cc/docs/real-data-integration/)
 - [API reference](https://agentstat.sdaniel.cc/docs/api-reference/)
 - [Examples](https://agentstat.sdaniel.cc/docs/examples/)
 
