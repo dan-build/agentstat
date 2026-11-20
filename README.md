@@ -5,24 +5,40 @@
 [![types](https://img.shields.io/npm/types/@dan-build/agentstat?style=flat-square)](https://www.npmjs.com/package/@dan-build/agentstat)
 [![license](https://img.shields.io/npm/l/@dan-build/agentstat?style=flat-square)](./LICENSE)
 
-**Live telemetry for LLM agents, rendered honestly.**
+**See when your AI agents stall, run away or thrash — live.**
 
-A React component that shows what your agents are doing right now: token rate,
-progress and status over time, a health score built only from signals you
-actually provide, and opt-in detection of stalls, runaway spikes and status
-thrashing. One canvas, about 17 KB min+gzip, no dependencies besides React.
+AgentStat watches agents while they run and says, in plain words, when one has
+stopped producing while it still claims to be working, when its output runs
+away, or when its status keeps flipping. It comes in two forms:
+
+- **A React component** for your own agent UI: token rate, status and health on
+  one canvas, about 22 KB min+gzip, no dependencies besides React.
+  [Quick start ↓](#quick-start)
+- **A macOS app and command line** for the coding agents on your machine:
+  every Claude Code session and subagent, live, local only.
+  [Get the app ↓](#the-macos-app)
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/dan-build/agentstat/main/docs/screenshot-dark.png">
-  <img src="https://raw.githubusercontent.com/dan-build/agentstat/main/docs/screenshot-light.png" alt="AgentStat showing three agents' token rates over 30 seconds. The Coder agent has stopped producing output while still reporting Active, and a red marker reads “Coder · stalled 15s while active”. A tooltip inspects a Planner sample: 3.3 t/s, 46%, Thinking." width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/dan-build/agentstat/main/docs/demo-dark.png">
+  <img src="https://raw.githubusercontent.com/dan-build/agentstat/main/docs/demo-light.png" alt="AgentStat charting three agents' token rates live. The Coder agent's output drops to zero while it still reports Active; seconds later an amber marker appears: “Coder · stalled 19s while active”. The Planner keeps alternating bursts and thinking, and the Researcher streams steadily." width="100%">
 </picture>
 
----
+## How it differs
 
-> **Running coding agents?** AgentStat also comes as a small macOS app with a
-> command line: every Claude Code session and subagent on your machine, live —
-> which one is working, which one waits on a tool, which one has stalled.
-> [Get the app →](#the-macos-app)
+Tracing platforms such as Langfuse and LangSmith record runs so you can
+inspect, evaluate and compare them. AgentStat is the live layer next to them:
+it runs where the agent's output is — in your app's UI, or on your own
+machine — and answers one question while the run is still going: *is this
+agent healthy right now?*
+
+| | Tracing platforms | AgentStat |
+|---|---|---|
+| **Built for** | Inspecting, evaluating and comparing runs | Watching runs as they happen |
+| **Where** | A hosted or self-hosted service | Inside your UI, or on your Mac |
+| **Answers** | What happened, what it cost, how good it was | Working, waiting, stalled or running away? |
+| **Data** | Typically prompts, responses and traces | Token counts, tool calls and status. Streamed text is only counted, never stored or sent |
+
+They complement each other: many setups will want both.
 
 ## Quick start
 
@@ -411,6 +427,9 @@ status current (including `complete` when an agent is idle):
   AgentStat can't tell that the workers an orchestrator waits on are gone.
 - **Requests that differ a lot in speed** (one run at 80 t/s, the next at
   150) can briefly read as a runaway after a pause.
+- **An agent that starts slow** — seconds of low but steady output (above
+  `spikeMinBaselineRate`, 1 t/s) before its first real burst — can have that
+  burst flagged as a runaway, since it's judged against the slow phase.
 - **Tool-call loops** that only alternate working states aren't flagged as
   thrash: that alternation is also how healthy agents work.
 - **Rates computed per small chunk** (alternating 0 and high values) can hide
@@ -559,7 +578,7 @@ Omit `color` on agents to use the palette, which switches with the theme.
   on the client.
 - **React:** 18 and 19.
 - **Modules:** ESM and CommonJS, typed for both.
-- **Tree-shaking:** importing only `detectAnomalies` adds about 1 KB.
+- **Tree-shaking:** importing only `detectAnomalies` adds about 2 KB.
 
 ## Browser support
 

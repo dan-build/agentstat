@@ -114,7 +114,8 @@
     "test:dist": "vitest run --config vitest.dist.config.ts",
     "eval:detectors": "node scripts/eval-detectors.mjs",
     "parity:gen": "node scripts/parity/generate.mjs",
-    "build:registry": "node scripts/build-registry.mjs"
+    "build:registry": "node scripts/build-registry.mjs",
+    "demo": "node scripts/demo-animation.mjs"
   },
   "peerDependencies": {
     "react": ">=18",
