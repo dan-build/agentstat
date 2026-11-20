@@ -335,13 +335,21 @@ export function drawFrame(
     ctx.stroke();
     ctx.fill();
 
-    const label = `${m.name} · ${m.anomaly.message}`;
+    let label = `${m.name} · ${m.anomaly.message}`;
     ctx.font = `500 11px ${FONT_SANS}`;
     ctx.textBaseline = 'middle';
-    const tw = ctx.measureText(label).width;
-    const right = m.x + 9 + tw <= PAD.left + w;
-    ctx.textAlign = right ? 'left' : 'right';
-    const lx = right ? m.x + 9 : m.x - 9;
+    ctx.textAlign = 'left';
+    // The label stays inside the plot, off the axis labels: right of the
+    // marker, else left of it, else pinned to whichever edge it reaches;
+    // shortened only when the plot is narrower than the label.
+    let tw = ctx.measureText(label).width;
+    while (tw > w && label.length > 1) tw = ctx.measureText((label = label.slice(0, -2) + '…')).width;
+    const lx =
+      m.x + 9 + tw <= PAD.left + w
+        ? m.x + 9
+        : m.x - 9 - tw >= PAD.left
+          ? m.x - 9 - tw
+          : Math.max(PAD.left, PAD.left + w - tw);
     // A background-colored halo keeps the label legible over lines.
     ctx.lineWidth = 3;
     ctx.lineJoin = 'round';
