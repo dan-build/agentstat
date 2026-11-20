@@ -14,6 +14,7 @@ import { ADVERSARIAL } from './adversarial';
 import { HOLDOUT } from './holdout';
 import { EVENTS } from './events';
 import { HOLDOUT2 } from './holdout2';
+import { HOLDOUT3 } from './holdout3';
 
 export { DEFAULT_ANOMALY_CONFIG, TOLERANCE_MS };
 
@@ -186,5 +187,6 @@ export function runAll(): ScenarioResult[] {
     ...HOLDOUT.map((sc) => runScenario(sc, 'holdout')),
     ...EVENTS.map((sc) => runScenario(sc, 'events')),
     ...HOLDOUT2.map((sc) => runScenario(sc, 'holdout2')),
+    ...HOLDOUT3.map((sc) => runScenario(sc, 'holdout3')),
   ];
 }

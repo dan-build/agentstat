@@ -429,9 +429,13 @@ status current (including `complete` when an agent is idle):
   AgentStat can't tell that the workers an orchestrator waits on are gone.
 - **Requests that differ a lot in speed** (one run at 80 t/s, the next at
   150) can briefly read as a runaway after a pause.
-- **An agent that starts slow** — seconds of low but steady output (above
-  `spikeMinBaselineRate`, 1 t/s) before its first real burst — can have that
-  burst flagged as a runaway, since it's judged against the slow phase.
+- **Report thinking.** Output while `thinking` (a reasoning trickle) isn't
+  counted as the agent's normal rate, so its first real burst isn't a
+  runaway. `push` sets `thinking` from `start` to the first token. A slow
+  phase reported as `active` (above `spikeMinBaselineRate`, 1 t/s) becomes
+  the norm, and the first burst after it can be flagged.
+- **A runaway from the first seconds** has no normal rate to compare with,
+  so it isn't flagged until the agent has a history.
 - **Tool-call loops** that only alternate working states aren't flagged as
   thrash: that alternation is also how healthy agents work.
 - **Rates computed per small chunk** (alternating 0 and high values) can hide

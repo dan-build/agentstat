@@ -2,8 +2,9 @@
 import { describe, it, expect } from 'vitest';
 import { AgentStore, type StoreEvent } from '../src/core/store';
 import { DEFAULT_ANOMALY_CONFIG } from '../src/anomaly';
+import type { AgentStatus } from '../src/types';
 
-function replay(rate: (tS: number) => number, seconds: number) {
+function replay(rate: (tS: number) => number, seconds: number, status: (tS: number) => AgentStatus = () => 'active') {
   const T0 = 10_000;
   const store = new AgentStore(
     [{ id: 'a', name: 'Agent', current: { tokensRate: 0, progress: 0, status: 'active' } }],
@@ -14,7 +15,7 @@ function replay(rate: (tS: number) => number, seconds: number) {
   for (let ms = 0; ms <= seconds * 1000; ms += 100) {
     const t = ms / 1000;
     // Deterministic ±5% wobble.
-    store.ingest('a', { tokensRate: rate(t) * (1 + 0.05 * Math.sin(ms / 70)), status: 'active' }, T0 + ms);
+    store.ingest('a', { tokensRate: rate(t) * (1 + 0.05 * Math.sin(ms / 70)), status: status(t) }, T0 + ms);
     if (ms % 500 === 0 && ms > 0) {
       store.healthTick(T0 + ms, true, DEFAULT_ANOMALY_CONFIG, (e) => {
         if (e.kind !== 'health') events.push({ ...e, at: t });
@@ -47,5 +48,23 @@ describe('detector episodes through the store', () => {
     expect(spikes.length).toBeLessThanOrEqual(2); // open + escalation
     expect(ends).toHaveLength(1);
     expect(ends[0].at).toBeGreaterThanOrEqual(160);
+  });
+
+  // A planner that starts by thinking (a 2.2 t/s trickle), then alternates
+  // 5 s of output at 15 t/s with 5 s of thinking.
+  const thinksFirst = (t: number): AgentStatus => (t < 5 || Math.floor(t / 5) % 2 === 0 ? 'thinking' : 'active');
+
+  it('does not call the first burst after a thinking start a spike', () => {
+    const ev = replay((t) => (thinksFirst(t) === 'thinking' ? 2.2 : 15), 90, thinksFirst);
+    expect(ev.some((e) => e.kind === 'anomaly')).toBe(false);
+  });
+
+  it('still catches a runaway after a thinking start', () => {
+    const ev = replay((t) => (t >= 60 ? 60 : thinksFirst(t) === 'thinking' ? 2.2 : 15), 90, (t) =>
+      t >= 60 ? 'active' : thinksFirst(t)
+    );
+    const spike = ev.find((e) => e.kind === 'anomaly' && e.anomaly.kind === 'spike');
+    expect(spike?.at).toBeGreaterThanOrEqual(60);
+    expect(spike?.at).toBeLessThan(65);
   });
 });
