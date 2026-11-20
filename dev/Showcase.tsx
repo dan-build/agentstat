@@ -1,6 +1,8 @@
 // dev/Showcase.tsx
 //
-// Deterministic scene for the README screenshots (`npm run screenshots`).
+// Deterministic scene for the still screenshots (`npm run screenshots`) and
+// the animated demo's frames (`npm run demo`, with `anim`: shorter, and no
+// staged inspection, so the stall is the one thing that happens).
 // Open http://localhost:5173/?shot=light (or dark) to preview it.
 //
 // The data is scripted, not simulated, so every capture tells the same story:
@@ -15,7 +17,7 @@ const TICK_MS = 100;
 const CODER_STALLS_AT_S = 25;
 const INSPECT_AT_S = 38.5;
 
-export default function Showcase({ theme }: { theme: 'light' | 'dark' }) {
+export default function Showcase({ theme, anim = false }: { theme: 'light' | 'dark'; anim?: boolean }) {
   const ref = useRef<AgentStatRef>(null);
   const agents = useMemo(
     () => [
@@ -43,10 +45,11 @@ export default function Showcase({ theme }: { theme: 'light' | 'dark' }) {
       const api = ref.current;
       if (!api) return;
 
-      // Planner: alternating 5 s phases of bursts and thinking, offset so the
-      // capture (~40 s) lands in the middle of a steady burst, where the
-      // panel's 500 ms refresh matches the line.
-      const plannerActive = Math.floor((t + 4) / 5) % 2 === 0;
+      // Planner: alternating 5 s phases of bursts and thinking. It starts
+      // with a burst, as agents do, so its usual peak is known before its
+      // first pause; the capture (~40 s) lands in the middle of a steady
+      // burst, where the panel's 500 ms refresh matches the line.
+      const plannerActive = Math.floor((t + 2.5) / 5) % 2 === 0;
       planner +=
         ((plannerActive ? 15 : 2.2) - planner) * 0.18 + drift('planner', plannerActive ? 0.35 : 0.12);
       progress.planner = Math.min(100, progress.planner + (plannerActive ? 0.22 : 0.04));
@@ -83,6 +86,7 @@ export default function Showcase({ theme }: { theme: 'light' | 'dark' }) {
     // Pin an inspection tooltip on the planner a few seconds back, using the
     // same keyboard path a user would.
     const inspect = setTimeout(() => {
+      if (anim) return;
       const canvas = document.querySelector<HTMLCanvasElement>('.agentstat-canvas');
       if (!canvas) return;
       canvas.focus({ preventScroll: true });
@@ -96,7 +100,7 @@ export default function Showcase({ theme }: { theme: 'light' | 'dark' }) {
       clearInterval(id);
       clearTimeout(inspect);
     };
-  }, []);
+  }, [anim]);
 
   const bg = theme === 'dark' ? '#060607' : '#f4f4f2';
   return (
@@ -114,7 +118,7 @@ export default function Showcase({ theme }: { theme: 'light' | 'dark' }) {
         windowSeconds={30}
         tokenAxisMax={40}
         anomalyDetection
-        height={640}
+        height={anim ? 420 : 640}
       />
     </div>
   );
