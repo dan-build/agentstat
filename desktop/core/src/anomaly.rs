@@ -53,6 +53,10 @@ pub struct AgentContext {
     pub work_since: Option<f64>,
     /// What a waiting agent waits on (e.g. a tool name).
     pub waiting_on: Option<String>,
+    /// Status changes covering the samples (the first gives the status at the
+    /// start). Output while `thinking` then isn't the norm for an agent that is
+    /// producing; while it is still thinking, all of its output counts.
+    pub status_log: Vec<Transition>,
 }
 
 /// An episode being reported, for detectors with memory.
@@ -312,6 +316,22 @@ pub fn detect_spike(
 
     let recent_ms = RECENT_MS.max(2.5 * typical_gap(tokens));
     let idle_cutoff = active_cutoff(tokens, cfg, ctx);
+    // Output while `thinking` (a reasoning trickle) isn't the norm for an agent
+    // that is producing now, so its first real burst isn't a spike. While it is
+    // still thinking, its peak is judged against all its output.
+    let mut j = 0;
+    let mut st: Option<Status> = None;
+    let thinking: Vec<bool> = tokens
+        .iter()
+        .map(|s| {
+            while j < ctx.status_log.len() && ctx.status_log[j].t <= s.t {
+                st = Some(ctx.status_log[j].status);
+                j += 1;
+            }
+            st == Some(Status::Thinking)
+        })
+        .collect();
+    let thinking_now = st == Some(Status::Thinking);
     let peak = match episode.and_then(|e| e.baseline) {
         Some(b) => b,
         None => {
@@ -321,12 +341,12 @@ pub fn detect_spike(
             let mut total = 0.0;
             let mut first_t = f64::INFINITY;
             let mut last_t = f64::NEG_INFINITY;
-            for s in tokens {
+            for (i, s) in tokens.iter().enumerate() {
                 if s.t < base_start || s.t >= base_end {
                     continue;
                 }
                 total += 1.0;
-                if s.v > idle_cutoff {
+                if s.v > idle_cutoff && !(thinking[i] && !thinking_now) {
                     baseline.push(s.v);
                     if s.t < first_t {
                         first_t = s.t;
@@ -408,12 +428,13 @@ pub fn detect_spike(
         });
     }
 
-    // Drift: a climb that keeps going, judged on speed while producing.
+    // Drift: a climb that keeps going, judged on speed while producing
+    // (thinking left out).
     let active_mean = |from: f64, to: f64, min_samples: f64| {
         let mut sum = 0.0;
         let mut n = 0.0;
-        for s in tokens {
-            if s.t < from || s.t >= to || s.v <= idle_cutoff {
+        for (i, s) in tokens.iter().enumerate() {
+            if s.t < from || s.t >= to || s.v <= idle_cutoff || thinking[i] {
                 continue;
             }
             sum += s.v;

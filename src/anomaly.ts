@@ -65,6 +65,13 @@ export interface AgentContext {
   workSince?: number;
   /** What a `waiting` agent is waiting on (e.g. a tool name), for the message. */
   waitingOn?: string;
+  /**
+   * Status changes covering the samples (the first entry gives the status at
+   * the start). A reasoning trickle while `thinking` then isn't the norm for
+   * the agent's real output, so its first real burst isn't a spike; while it
+   * is still thinking, all of its output counts, so a runaway is caught.
+   */
+  statusLog?: StatusChange[];
 }
 
 /** What detectors with memory need to know about an episode in progress. */
@@ -362,7 +369,8 @@ function afterIdleSpike(
  *
  * Judging against the usual *peak* keeps bursty but healthy agents quiet, and
  * using only active samples means resuming after a pause (of any length) is
- * never a spike. Nothing is judged until the active baseline holds
+ * never a spike. With `ctx.statusLog`, output while `thinking` doesn't define
+ * the norm unless the agent is still thinking. Nothing is judged until the active baseline holds
  * `spikeMinSamples` samples over at least 3 s, so a start-up ramp isn't
  * mistaken for the norm.
  *
@@ -385,6 +393,18 @@ export function detectSpike(
   // Sparse telemetry: the recent window always spans a few samples.
   const recentMs = Math.max(RECENT_MS, 2.5 * typicalGap(tokens));
   const idleCutoff = activeCutoff(tokens, cfg, ctx);
+  // Output while `thinking` (a reasoning trickle) isn't the norm for an
+  // agent that is producing now, so its first real burst isn't a spike.
+  // While it is still thinking, its peak is judged against all its output,
+  // so a runaway then is still caught.
+  const log = ctx?.statusLog ?? [];
+  let j = 0;
+  let st: AgentStatus | undefined;
+  const thinking = tokens.map((s) => {
+    while (j < log.length && log[j].t <= s.t) st = log[j++].status;
+    return st === 'thinking';
+  });
+  const thinkingNow = st === 'thinking';
   let peakNorm: number;
   if (episode?.baseline !== undefined) {
     // An open episode keeps the baseline it opened against, so a sustained
@@ -397,15 +417,15 @@ export function detectSpike(
     let total = 0;
     let firstT = Infinity;
     let lastT = -Infinity;
-    for (const s of tokens) {
-      if (s.t < baseStart || s.t >= baseEnd) continue;
+    tokens.forEach((s, i) => {
+      if (s.t < baseStart || s.t >= baseEnd) return;
       total++;
-      if (s.v > idleCutoff) {
+      if (s.v > idleCutoff && !(thinking[i] && !thinkingNow)) {
         baseline.push(s.v);
         if (s.t < firstT) firstT = s.t;
         lastT = s.t;
       }
-    }
+    });
     const usable =
       baseline.length >= cfg.spikeMinSamples && lastT - firstT >= WARMUP_MS && baseline.length >= total / 2;
     // After a stall or a long pause the recent window isn't a norm: judge
@@ -467,16 +487,16 @@ export function detectSpike(
   // Drift: a climb that keeps going — the last 5 s against 10 s windows that
   // ended 10 s and 25 s ago. A ramp that rises once and levels off (start-up)
   // fails the middle step; averages keep bursty output comparable.
-  // Speed while producing: idle samples (pauses, finished turns) are left out,
-  // so how much of a window was idle doesn't read as a change in rate.
+  // Speed while producing: idle samples (pauses, finished turns) and thinking
+  // are left out, so how much of a window was idle doesn't read as a change.
   const activeMean = (from: number, to: number, minSamples: number) => {
     let sum = 0;
     let n = 0;
-    for (const s of tokens) {
-      if (s.t < from || s.t >= to || s.v <= idleCutoff) continue;
+    tokens.forEach((s, i) => {
+      if (s.t < from || s.t >= to || s.v <= idleCutoff || thinking[i]) return;
       sum += s.v;
       n++;
-    }
+    });
     return n >= minSamples ? sum / n : NaN;
   };
   const before = activeMean(now - DRIFT_AGO_MS - 10_000, now - DRIFT_AGO_MS, cfg.spikeMinSamples / 2);

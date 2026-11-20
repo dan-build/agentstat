@@ -757,7 +757,8 @@ export class AgentStore {
         // updated from this tick's active output.
         let sum = 0;
         let n = 0;
-        for (const s of tBuf.since(now - (dt || 500))) {
+        // Thinking output (a reasoning trickle) isn't the agent's active rate.
+        for (const s of rec.current.status === 'thinking' ? [] : tBuf.since(now - (dt || 500))) {
           if (s.v > cfg.stallRateThreshold) {
             sum += s.v;
             n++;
@@ -780,6 +781,7 @@ export class AgentStore {
           statusSince: this._statusSince.get(rec.id),
           workSince: this._workSince.get(rec.id),
           waitingOn: st?.tools[st.tools.length - 1] || undefined,
+          statusLog: this.status.get(rec.id)?.transitionsInRange(now - this.retentionMs(), now),
         });
         const prev = this.anomalies.get(rec.id) ?? [];
         if (found.length || prev.length) this.dirty = true;

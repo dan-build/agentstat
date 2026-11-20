@@ -23,7 +23,10 @@ import { build } from 'esbuild';
 // → telemetry hook + components 25.4 KB → 25.5 KB exporting the helpers the
 // shadcn registry components share, for every export together; an app
 // that renders the chart from a stream ships ~22.6 KB (CHART_ONLY_BUDGET).
-const BUDGETS = { 'dist/index.js': 26_000, 'dist/index.cjs': 26_500 };
+// → +200 B (0.7.2): the spike detector reads the status log so thinking
+// output isn't the agent's norm (start-up false alarms), and pinned marker
+// labels carry the severity shape.
+const BUDGETS = { 'dist/index.js': 26_200, 'dist/index.cjs': 26_700 };
 // The standalone detectors (detectAnomalies) on their own.
 const TREESHAKE_BUDGET = 2_500;
 
@@ -71,7 +74,7 @@ const entry = fileURLToPath(new URL('../dist/index.js', import.meta.url));
 
 // What an app that renders the chart from a stream ships: the other exports
 // (telemetry hook and components) must tree-shake away.
-const CHART_ONLY_BUDGET = 23_000;
+const CHART_ONLY_BUDGET = 23_200; // +200 B in 0.7.2, see BUDGETS
 {
   const out = await build({
     stdin: { contents: `export { AgentStat, useAgentStream } from ${JSON.stringify(entry)};`, resolveDir: '.' },
