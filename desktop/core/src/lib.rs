@@ -9,6 +9,7 @@
 
 pub mod anomaly;
 pub mod health;
+pub mod macos;
 mod num;
 pub mod series;
 pub mod statuslog;

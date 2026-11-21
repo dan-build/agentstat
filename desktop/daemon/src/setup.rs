@@ -840,6 +840,21 @@ pub fn doctor(port: u16) -> ExitCode {
         }
     }
 
+    // Notifications come from the app; macOS may have them off for it (an
+    // app that never asked is often registered with them off).
+    let app_installed = [home.join("Applications/AgentStat.app"), PathBuf::from("/Applications/AgentStat.app")]
+        .iter()
+        .any(|p| p.is_dir());
+    if app_installed {
+        match agentstat_core::macos::notifications_allowed_here(LABEL) {
+            Some(true) => out.ok("Notifications allowed for AgentStat"),
+            Some(false) => out.warn(
+                "Notifications are off for AgentStat: no alert when an agent needs you. Turn on Allow Notifications in System Settings → Notifications → AgentStat",
+            ),
+            None => out.note("AgentStat hasn't sent a notification yet (open the app once)"),
+        }
+    }
+
     if let Ok(body) = client::get(port, "/v1/agents")
         && let Ok(v) = serde_json::from_str::<Value>(&body)
     {

@@ -35,6 +35,9 @@ const RECENT_MAX: usize = 30;
 /// An attention message older than this when it arrives (replayed history)
 /// isn't notified.
 const ATTENTION_FRESH_MS: f64 = 30_000.0;
+/// How often to check whether macOS lets AgentStat notify.
+const NOTIFY_CHECK_MS: f64 = 30_000.0;
+const BUNDLE_ID: &str = "io.github.dan-build.agentstat";
 /// Redraw interval while the chart scrolls: a 60 s window moves under half a
 /// pixel per frame at this rate, so it looks continuous for a fraction of the
 /// cost of every display frame.
@@ -102,6 +105,9 @@ struct AgentStatApp {
     notifications: bool,
     /// Attention messages already notified: (agent, time bits).
     notified: HashSet<(String, u64)>,
+    /// macOS has notifications off for AgentStat (checked every 30 s).
+    notify_off: bool,
+    notify_checked: f64,
     calls: HashMap<String, Calls>,
     /// When each agent's last event arrived (app clock), so a silent agent
     /// doesn't keep the chart redrawing fast.
@@ -191,6 +197,8 @@ impl AgentStatApp {
                 true
             },
             notified: HashSet::new(),
+            notify_off: false,
+            notify_checked: 0.0,
         }
     }
 
@@ -286,6 +294,14 @@ impl AgentStatApp {
 
     fn tick(&mut self, cx: &mut Context<Self>) {
         let now = now_ms();
+        if self.notifications && now - self.notify_checked >= NOTIFY_CHECK_MS {
+            self.notify_checked = now;
+            let off = agentstat_core::macos::notifications_allowed_here(BUNDLE_ID) == Some(false);
+            if off != self.notify_off {
+                self.notify_off = off;
+                cx.notify();
+            }
+        }
         if let Some((renders, active, ticks)) = &mut self.debug {
             *ticks += 1;
             if *ticks == 10 {
@@ -630,6 +646,41 @@ impl AgentStatApp {
                     ),
             )
             .child(div().id("fleet").flex_1().overflow_y_scroll().pb_3().flex().flex_col().gap_0p5().children(rows))
+            .when(self.notifications && self.notify_off, |d| {
+                d.child(
+                    div()
+                        .flex_shrink_0()
+                        .mx_2()
+                        .mb_2()
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(theme.border)
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .text_size(px(12.))
+                        .child(div().text_color(theme.text_secondary).child("Notifications are off for AgentStat"))
+                        .child(
+                            div()
+                                .text_color(theme.text_tertiary)
+                                .child("You won't hear when an agent needs you or finishes."),
+                        )
+                        .child(
+                            div()
+                                .id("notify-settings")
+                                .text_color(theme.focus)
+                                .cursor_pointer()
+                                .on_click(|_: &ClickEvent, _, _| {
+                                    let _ = std::process::Command::new("/usr/bin/open")
+                                        .arg("x-apple.systempreferences:com.apple.preference.notifications")
+                                        .spawn();
+                                })
+                                .child("Turn on in Notifications settings…"),
+                        ),
+                )
+            })
     }
 
     fn stat(theme: &Theme, label: &str, value: String) -> impl IntoElement {
