@@ -186,7 +186,10 @@ impl AgentStatApp {
             chart_bounds: Rc::new(Cell::new(None)),
             reduce_motion: reduce_motion(),
             debug: std::env::var_os("AGENTSTAT_DEBUG").map(|_| (0, false, 0)),
-            notifications: std::env::var("AGENTSTAT_NOTIFY").map_or(true, |v| v != "0"),
+            notifications: std::env::var("AGENTSTAT_NOTIFY").map_or(true, |v| v != "0") && {
+                notify::prepare();
+                true
+            },
             notified: HashSet::new(),
         }
     }
@@ -260,7 +263,7 @@ impl AgentStatApp {
                                 _ => "",
                             };
                             let title = if what.is_empty() { name } else { format!("{name} · {what}") };
-                            notify::post(&title, &message, app.as_deref());
+                            notify::post(&format!("{id}|{reason}|{time}"), &title, &message, app.as_deref());
                         }
                     }
                     Message::Remove { id } => {

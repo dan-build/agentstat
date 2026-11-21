@@ -91,11 +91,34 @@ fn center() -> Option<*mut Object> {
     }
 }
 
-/// Post a notification. `app` is the bundle id to bring forward on click.
-pub fn post(title: &str, body: &str, app: Option<&str>) -> bool {
-    let Some(c) = center() else { return false };
+/// Connect to the notification center at launch, and clear what an earlier
+/// run left in Notification Center. The first notification on a fresh
+/// connection is shown as an update (no banner), so it shouldn't be a real one.
+pub fn prepare() {
+    if let Some(c) = center() {
+        unsafe {
+            let _: () = msg_send![c, removeAllDeliveredNotifications];
+        }
+    }
+}
+
+/// Post a notification. `key` identifies it: without a distinct identifier
+/// macOS treats a new notification as an update of the last one and shows
+/// no banner. `app` is the bundle id to bring forward on click.
+pub fn post(key: &str, title: &str, body: &str, app: Option<&str>) -> bool {
+    let debug = std::env::var_os("AGENTSTAT_DEBUG").is_some();
+    let Some(c) = center() else {
+        if debug {
+            eprintln!("notify: no notification center (not running from an app bundle?)");
+        }
+        return false;
+    };
+    if debug {
+        eprintln!("notify: posting {title:?} / {body:?} (app {app:?})");
+    }
     unsafe {
         let n: *mut Object = msg_send![class!(NSUserNotification), new];
+        let _: () = msg_send![n, setIdentifier: ns_string(key)];
         let _: () = msg_send![n, setTitle: ns_string(title)];
         let _: () = msg_send![n, setInformativeText: ns_string(body)];
         if let Some(a) = app {
