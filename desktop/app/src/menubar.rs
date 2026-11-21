@@ -30,13 +30,13 @@ pub struct State {
 }
 
 impl State {
-    /// The text next to the icon: "1 needs you", "2 working", or nothing.
+    /// The text next to the icon, kept short (a crowded menu bar hides items):
+    /// "1 needs you", else how many are working ("2"), else nothing.
     pub fn title(&self) -> String {
         match (self.needs_you, self.working) {
             (0, 0) => String::new(),
-            (0, w) => format!("{w} working"),
-            (n, 0) => format!("{n} needs you"),
-            (n, w) => format!("{n} needs you · {w} working"),
+            (0, w) => w.to_string(),
+            (n, _) => format!("{n} needs you"),
         }
     }
 }
@@ -128,6 +128,8 @@ impl MenuBar {
             // NSVariableStatusItemLength
             let item: *mut Object = msg_send![bar, statusItemWithLength: -1.0f64];
             let _: () = msg_send![item, retain];
+            // Where the person drags it (Cmd-drag) is remembered across launches.
+            let _: () = msg_send![item, setAutosaveName: ns_string("AgentStat")];
             let button: *mut Object = msg_send![item, button];
             if !button.is_null() {
                 let image: *mut Object = msg_send![class!(NSImage),
@@ -143,6 +145,10 @@ impl MenuBar {
                 }
             }
             let target: *mut Object = msg_send![target_class(), new];
+            if std::env::var_os("AGENTSTAT_DEBUG").is_some() {
+                let visible: objc::runtime::BOOL = if item.is_null() { NO } else { msg_send![item, isVisible] };
+                eprintln!("menubar: item {item:?}, button {button:?}, visible {}", visible != NO);
+            }
             MenuBar { item, target, shown: None }
         }
     }
@@ -203,8 +209,8 @@ mod tests {
     fn title_says_who_needs_you_first() {
         let s = |needs_you, working| State { needs_you, working, lines: vec![] }.title();
         assert_eq!(s(0, 0), "");
-        assert_eq!(s(0, 2), "2 working");
+        assert_eq!(s(0, 2), "2");
         assert_eq!(s(1, 0), "1 needs you");
-        assert_eq!(s(1, 3), "1 needs you · 3 working");
+        assert_eq!(s(1, 3), "1 needs you");
     }
 }
