@@ -1,6 +1,6 @@
 {
   "name": "agentstat",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Every Claude Code session and subagent, live in AgentStat: turns, tools and their outcomes as they happen.",
   "author": { "name": "dan-build", "url": "https://github.com/dan-build" },
   "homepage": "https://agentstat.sdaniel.cc",

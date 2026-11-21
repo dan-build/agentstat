@@ -30,9 +30,28 @@ pub enum Feed {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Message {
-    Event { id: String, event: Event },
-    Agent { id: String, name: Option<String>, color: Option<String>, config: Option<Config> },
-    Remove { id: String },
+    Event {
+        id: String,
+        event: Event,
+    },
+    Agent {
+        id: String,
+        name: Option<String>,
+        color: Option<String>,
+        config: Option<Config>,
+    },
+    Remove {
+        id: String,
+    },
+    /// Something the person should know about now (needs-you, done, failed,
+    /// stalled, runaway), with the app the session runs in.
+    Attention {
+        id: String,
+        reason: String,
+        message: String,
+        app: Option<String>,
+        time: f64,
+    },
 }
 
 #[derive(Debug, Deserialize)]

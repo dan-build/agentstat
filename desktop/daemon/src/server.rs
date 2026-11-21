@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use agentstat_core::{AnomalyConfig, Store, StoreEvent, StoreOptions};
+use agentstat_core::{AnomalyConfig, AnomalyKind, Severity, Store, StoreEvent, StoreOptions};
 use axum::body::{Body, Bytes};
 use axum::extract::{DefaultBodyLimit, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -22,7 +22,7 @@ use serde_json::Value;
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::claude::{ClaudeMapper, Output, is_claude};
+use crate::claude::{ClaudeMapper, Output, Reason, is_claude};
 use crate::now_ms;
 use crate::otlp::log_records;
 use crate::stream::{Body as MsgBody, EventLog, Message};
@@ -104,6 +104,7 @@ impl Daemon {
                 self.last_seen.remove(id);
                 self.claude.forget(id);
             }
+            MsgBody::Attention { .. } => {}
         }
     }
 
@@ -119,7 +120,12 @@ impl Daemon {
 
     /// Ingest one Claude Code hook call; returns how many events it produced.
     pub fn ingest_hook(&mut self, body: &Value, now: f64) -> usize {
-        let out = self.claude.map_hook(body, now);
+        self.ingest_hook_in(body, None, now)
+    }
+
+    /// [`ingest_hook`](Self::ingest_hook), with the app the session runs in.
+    pub fn ingest_hook_in(&mut self, body: &Value, app: Option<&str>, now: f64) -> usize {
+        let out = self.claude.map_hook_in(body, app, now);
         self.emit(out, now)
     }
 
@@ -132,6 +138,9 @@ impl Daemon {
                 Output::Event { id, event } => {
                     n += 1;
                     self.log.push(&id, event, now)
+                }
+                Output::Attention { id, reason, message, app, time } => {
+                    self.log.attention(&id, reason, message, app, time)
                 }
             };
             self.apply(&m, now);
@@ -149,6 +158,21 @@ impl Daemon {
                 StoreEvent::Resolved { id, name, anomaly } => (id, name, anomaly, true),
                 StoreEvent::Health { .. } => continue,
             };
+            // A critical stall or runaway is worth a notification (once per
+            // episode: the store reports an episode when it opens or escalates).
+            if !resolved && a.severity == Severity::Critical {
+                let reason = if a.kind == AnomalyKind::Stall {
+                    Some(Reason::Stalled)
+                } else if a.kind == AnomalyKind::Spike {
+                    Some(Reason::Runaway)
+                } else {
+                    None
+                };
+                if let Some(reason) = reason {
+                    let app = self.claude.app_of(&id);
+                    self.log.attention(&id, reason, a.message.clone(), app, now);
+                }
+            }
             let label = |v: Value| v.as_str().unwrap_or_default().to_string();
             self.recent.push(RecentAnomaly {
                 id,
@@ -285,11 +309,13 @@ async fn logs(State(state): State<Shared>, headers: HeaderMap, body: Bytes) -> R
 }
 
 /// A Claude Code hook (the AgentStat plugin posts each one's JSON input).
-async fn hook(State(state): State<Shared>, body: Bytes) -> Response {
+async fn hook(State(state): State<Shared>, headers: HeaderMap, body: Bytes) -> Response {
     let Ok(v) = serde_json::from_slice::<Value>(&body) else {
         return (StatusCode::BAD_REQUEST, "invalid JSON").into_response();
     };
-    state.lock().unwrap_or_else(|e| e.into_inner()).ingest_hook(&v, now_ms());
+    // The app the session runs in (the plugin sends its bundle id), to bring it forward.
+    let app = headers.get("x-agentstat-app").and_then(|h| h.to_str().ok());
+    state.lock().unwrap_or_else(|e| e.into_inner()).ingest_hook_in(&v, app, now_ms());
     // An empty 2xx: nothing for Claude Code to act on.
     StatusCode::NO_CONTENT.into_response()
 }

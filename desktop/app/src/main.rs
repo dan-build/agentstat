@@ -5,10 +5,11 @@
 
 mod chart;
 mod feed;
+mod notify;
 mod theme;
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,6 +32,9 @@ const WINDOW_MS: f64 = 60_000.0;
 /// Health, detection and the status timers refresh this often.
 const TICK: Duration = Duration::from_millis(500);
 const RECENT_MAX: usize = 30;
+/// An attention message older than this when it arrives (replayed history)
+/// isn't notified.
+const ATTENTION_FRESH_MS: f64 = 30_000.0;
 /// Redraw interval while the chart scrolls: a 60 s window moves under half a
 /// pixel per frame at this rate, so it looks continuous for a fraction of the
 /// cost of every display frame.
@@ -94,6 +98,10 @@ struct Calls {
 
 struct AgentStatApp {
     store: Store,
+    /// Post macOS notifications (off with AGENTSTAT_NOTIFY=0).
+    notifications: bool,
+    /// Attention messages already notified: (agent, time bits).
+    notified: HashSet<(String, u64)>,
     calls: HashMap<String, Calls>,
     /// When each agent's last event arrived (app clock), so a silent agent
     /// doesn't keep the chart redrawing fast.
@@ -178,6 +186,8 @@ impl AgentStatApp {
             chart_bounds: Rc::new(Cell::new(None)),
             reduce_motion: reduce_motion(),
             debug: std::env::var_os("AGENTSTAT_DEBUG").map(|_| (0, false, 0)),
+            notifications: std::env::var("AGENTSTAT_NOTIFY").map_or(true, |v| v != "0"),
+            notified: HashSet::new(),
         }
     }
 
@@ -229,6 +239,29 @@ impl AgentStatApp {
                     Message::Agent { id, name, color, config } => {
                         let band = config.map(|c| c.expected_tokens_per_sec);
                         self.store.describe(&id, name, color, band, now);
+                    }
+                    Message::Attention { id, reason, message, app, time } => {
+                        // Live ones only: history replayed on (re)connect was
+                        // either seen already or is too old to act on.
+                        if self.notified.len() > 1_000 {
+                            self.notified.clear();
+                        }
+                        if self.notifications
+                            && now - time < ATTENTION_FRESH_MS
+                            && self.notified.insert((id.clone(), time.to_bits()))
+                        {
+                            let name = self.store.agent(&id).map(|a| a.name.clone()).unwrap_or_else(|| id.clone());
+                            let what = match reason.as_str() {
+                                "needs-you" => "needs you",
+                                "done" => "done",
+                                "failed" => "failed",
+                                "stalled" => "stalled",
+                                "runaway" => "running away",
+                                _ => "",
+                            };
+                            let title = if what.is_empty() { name } else { format!("{name} · {what}") };
+                            notify::post(&title, &message, app.as_deref());
+                        }
                     }
                     Message::Remove { id } => {
                         self.store.remove(&id);
