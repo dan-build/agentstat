@@ -218,3 +218,53 @@ fn refuses_other_hosts_and_protobuf() {
     assert_eq!(status, 415);
     assert!(body(&resp).contains("http/json"));
 }
+
+#[test]
+fn the_day_s_history_counts_tools_tokens_and_cost() {
+    let port = start();
+    let host = format!("127.0.0.1:{port}");
+    let post = |path: &str, body: serde_json::Value| {
+        let (status, _) =
+            request(port, "POST", path, &host, &[("Content-Type", "application/json")], &body.to_string());
+        assert!(status == 200 || status == 204, "{path}: {status}");
+    };
+    let hook =
+        |event: &str| serde_json::json!({"session_id": "s-h", "cwd": "/Users/me/code/shop", "hook_event_name": event});
+    let mut pre = hook("PreToolUse");
+    pre["tool_name"] = "Bash".into();
+    pre["tool_use_id"] = "toolu_1".into();
+    post("/v1/hooks/claude", hook("UserPromptSubmit"));
+    post("/v1/hooks/claude", pre);
+    let now_ns = format!("{}", (agentstat_daemon::now_ms() as u64) * 1_000_000);
+    let attr = |k: &str, v: serde_json::Value| serde_json::json!({"key": k, "value": v});
+    post(
+        "/v1/logs",
+        serde_json::json!({"resourceLogs": [{
+            "resource": {"attributes": [attr("service.name", serde_json::json!({"stringValue": "claude-code"}))]},
+            "scopeLogs": [{"scope": {"name": "com.anthropic.claude_code.events"}, "logRecords": [{
+                "timeUnixNano": now_ns,
+                "body": {"stringValue": "claude_code.api_request"},
+                "attributes": [
+                    attr("event.name", serde_json::json!({"stringValue": "api_request"})),
+                    attr("session.id", serde_json::json!({"stringValue": "s-h"})),
+                    attr("output_tokens", serde_json::json!({"intValue": 50})),
+                    attr("duration_ms", serde_json::json!({"intValue": 400})),
+                    attr("cost_usd", serde_json::json!({"doubleValue": 0.0125})),
+                ]
+            }]}]
+        }]}),
+    );
+    let (status, resp) = request(port, "GET", "/v1/history", "localhost", &[], "");
+    assert_eq!(status, 200);
+    let v: Value = serde_json::from_str(body(&resp)).unwrap();
+    let r = &v["agents"]["claude:s-h"];
+    assert_eq!(r["name"], "shop");
+    assert_eq!(r["tools"], 1);
+    assert_eq!(r["outputTokens"], 50.0);
+    assert_eq!(r["costUsd"], 0.0125);
+    assert_eq!(v["dates"][0], v["date"]);
+    // Prompt and tool text never reach history.
+    assert!(!body(&resp).contains("toolu_1"));
+    let (status, _) = request(port, "GET", "/v1/history?date=../../etc", "localhost", &[], "");
+    assert_eq!(status, 404);
+}

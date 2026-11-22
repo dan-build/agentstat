@@ -25,6 +25,44 @@ pub enum Feed {
     /// No `agentstat` binary to start the service with.
     NoService,
     Message(Message),
+    /// A day of history (see [`fetch_history`]); None when it couldn't be read.
+    History(Option<HistoryView>),
+}
+
+/// `GET /v1/history`: a day's records and the dates there are.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct HistoryView {
+    #[serde(default)]
+    pub dates: Vec<String>,
+    #[serde(flatten)]
+    pub day: agentstat_core::history::Day,
+}
+
+/// One short GET to the service; the body on 200.
+fn get(port: u16, path: &str) -> Option<String> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let mut s = TcpStream::connect_timeout(&addr, Duration::from_millis(500)).ok()?;
+    s.set_read_timeout(Some(Duration::from_secs(3))).ok()?;
+    write!(s, "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n").ok()?;
+    let mut raw = Vec::new();
+    s.read_to_end(&mut raw).ok()?;
+    let text = String::from_utf8_lossy(&raw);
+    let (head, body) = text.split_once("\r\n\r\n")?;
+    let ok = head.lines().next().is_some_and(|l| l.split_whitespace().nth(1) == Some("200"));
+    (ok && !head.to_ascii_lowercase().contains("transfer-encoding: chunked")).then(|| body.to_string())
+}
+
+/// Read a day of history (today when `date` is None) on a background thread;
+/// the answer arrives as [`Feed::History`].
+pub fn fetch_history(port: u16, date: Option<String>, tx: UnboundedSender<Feed>) {
+    std::thread::spawn(move || {
+        let path = match &date {
+            Some(d) if agentstat_core::history::is_date(d) => format!("/v1/history?date={d}"),
+            _ => "/v1/history".to_string(),
+        };
+        let view = get(port, &path).and_then(|b| serde_json::from_str::<HistoryView>(&b).ok());
+        let _ = tx.unbounded_send(Feed::History(view));
+    });
 }
 
 #[derive(Debug, Deserialize)]

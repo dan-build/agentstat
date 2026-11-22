@@ -634,6 +634,12 @@ the menu bar:
 - **Closing the window** hides AgentStat; it keeps watching from the menu bar.
   Quit from the menu bar item or with Cmd-Q.
 
+**Today** at the top of the app's sidebar, or `agentstat today` in a terminal,
+shows the day by project: sessions, time working, output tokens, cost, tool
+calls and anomalies. The service keeps a week of these days on your Mac, in
+`~/Library/Application Support/AgentStat/history/`. It keeps names and numbers
+only, never prompt or response text.
+
 ### Verify, don't trust
 
 AgentStat isn't notarized by Apple, on purpose: there's no company or

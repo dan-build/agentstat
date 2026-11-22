@@ -39,6 +39,17 @@ pub enum Output {
         app: Option<String>,
         time: f64,
     },
+    /// What a model call cost (for the day's history), in US dollars.
+    Cost {
+        id: String,
+        usd: f64,
+    },
+}
+
+/// What a model call cost, when telemetry reports a sane amount.
+fn cost_of(r: &Record, id: &str) -> Option<Output> {
+    let usd = r.num("cost_usd").filter(|c| c.is_finite() && *c > 0.0 && *c < 1_000.0)?;
+    Some(Output::Cost { id: agent_id(id), usd })
 }
 
 /// Why an agent needs attention.
@@ -178,6 +189,9 @@ impl ClaudeMapper {
                 }
             }
             emit(sid, s, events, &mut out);
+            if event == "api_request" {
+                out.extend(cost_of(r, sid));
+            }
             return out;
         }
         match event {
@@ -233,6 +247,9 @@ impl ClaudeMapper {
             _ => {}
         }
         emit(sid, s, events, &mut out);
+        if event == "api_request" {
+            out.extend(cost_of(r, sid));
+        }
         out
     }
 

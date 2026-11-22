@@ -23,6 +23,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::claude::{ClaudeMapper, Output, Reason, is_claude};
+use crate::history::{self, Day, History};
 use crate::now_ms;
 use crate::otlp::log_records;
 use crate::stream::{Body as MsgBody, EventLog, Message};
@@ -41,6 +42,11 @@ const MAX_BODY: usize = 512 * 1024;
 /// (read and dropped; only names and ids are kept), and a lost tool end would
 /// leave the agent "waiting" forever.
 const MAX_HOOK_BODY: usize = 16 * 1024 * 1024;
+/// An unfinished agent counts as working for the day's history only while
+/// it was heard from this recently (an agent that went quiet isn't working).
+const WORKING_QUIET_MS: f64 = 5.0 * 60_000.0;
+/// Longest gap between ticks counted as working time (a sleep isn't work).
+const MAX_TICK_GAP_MS: f64 = 2_000.0;
 /// Live streams served at once.
 const MAX_STREAMS: usize = 16;
 static STREAMS: AtomicUsize = AtomicUsize::new(0);
@@ -53,6 +59,13 @@ pub struct Daemon {
     /// When each agent was last heard from, for idle removal.
     last_seen: HashMap<String, f64>,
     recent: Vec<RecentAnomaly>,
+    /// What each agent did today (and the past week's files).
+    history: History,
+    /// The previous tick, for working time.
+    ticked_at: f64,
+    /// Anomaly episodes open now, so one counts once in history (the store
+    /// reports an episode again when it escalates).
+    open_episodes: std::collections::HashSet<(String, &'static str)>,
     /// Random per run, so clients can tell a restart from a resume.
     pub instance: String,
 }
@@ -72,9 +85,19 @@ pub struct RecentAnomaly {
 pub type Shared = Arc<Mutex<Daemon>>;
 
 impl Daemon {
+    /// A service whose history stays in memory.
     pub fn new() -> Self {
-        let seed = now_ms().to_bits() ^ ((std::process::id() as u64) << 32);
+        Self::with_history(None)
+    }
+
+    /// A service whose history is kept in `dir` (see [`history`]).
+    pub fn with_history(dir: Option<std::path::PathBuf>) -> Self {
+        let now = now_ms();
+        let seed = now.to_bits() ^ ((std::process::id() as u64) << 32);
         Daemon {
+            history: History::open(dir, now),
+            ticked_at: now,
+            open_episodes: Default::default(),
             log: EventLog::default(),
             store: Store::new(Vec::new(), StoreOptions::default(), now_ms()),
             claude: ClaudeMapper::default(),
@@ -93,13 +116,27 @@ impl Daemon {
                 self.store.ensure(id, t, now);
                 self.store.push(id, event, now);
                 self.last_seen.insert(id.clone(), now);
+                let name = self.store.agent(id).map(|a| a.name.as_str());
+                if let Some(r) = self.history.record(id, name, now) {
+                    match event {
+                        agentstat_core::Event::Tokens { count: Some(c), .. } if c.is_finite() && *c > 0.0 => {
+                            r.output_tokens += c
+                        }
+                        agentstat_core::Event::ToolStart { .. } => r.tools += 1,
+                        agentstat_core::Event::ToolEnd { error: Some(true), .. }
+                        | agentstat_core::Event::Error { .. } => r.errors += 1,
+                        _ => {}
+                    }
+                }
             }
             MsgBody::Agent { id, name, color, config } => {
                 let band = config.as_ref().map(|c| c.expected_tokens_per_sec);
                 self.store.describe(id, name.clone(), color.clone(), band, now);
                 self.last_seen.insert(id.clone(), now);
+                self.history.record(id, name.as_deref(), now);
             }
             MsgBody::Remove { id } => {
+                self.open_episodes.retain(|(a, _)| a != id);
                 self.store.remove(id);
                 self.last_seen.remove(id);
                 self.claude.forget(id);
@@ -142,6 +179,13 @@ impl Daemon {
                 Output::Attention { id, reason, message, app, time } => {
                     self.log.attention(&id, reason, message, app, time)
                 }
+                Output::Cost { id, usd } => {
+                    let name = self.store.agent(&id).map(|a| a.name.clone());
+                    if let Some(r) = self.history.record(&id, name.as_deref(), now) {
+                        r.cost_usd += usd;
+                    }
+                    continue;
+                }
             };
             self.apply(&m, now);
         }
@@ -173,6 +217,22 @@ impl Daemon {
                     self.log.attention(&id, reason, a.message.clone(), app, now);
                 }
             }
+            let kind = match a.kind {
+                AnomalyKind::Stall => "stall",
+                AnomalyKind::Spike => "spike",
+                AnomalyKind::Thrash => "thrash",
+            };
+            if resolved {
+                self.open_episodes.remove(&(id.clone(), kind));
+            } else if self.open_episodes.insert((id.clone(), kind))
+                && let Some(r) = self.history.record(&id, Some(&name), now)
+            {
+                match a.kind {
+                    AnomalyKind::Stall => r.stalls += 1,
+                    AnomalyKind::Spike => r.runaways += 1,
+                    AnomalyKind::Thrash => r.thrash += 1,
+                }
+            }
             let label = |v: Value| v.as_str().unwrap_or_default().to_string();
             self.recent.push(RecentAnomaly {
                 id,
@@ -184,6 +244,21 @@ impl Daemon {
                 resolved,
             });
         }
+        let dt = (now - self.ticked_at).clamp(0.0, MAX_TICK_GAP_MS);
+        self.ticked_at = now;
+        let working: Vec<(String, String)> = self
+            .store
+            .agents()
+            .filter(|a| a.current.status != agentstat_core::Status::Complete)
+            .filter(|a| self.last_seen.get(&a.id).is_some_and(|t| now - t < WORKING_QUIET_MS))
+            .map(|a| (a.id.clone(), a.name.clone()))
+            .collect();
+        for (id, name) in working {
+            if let Some(r) = self.history.record(&id, Some(&name), now) {
+                r.working_ms += dt;
+            }
+        }
+        self.history.maybe_save(now);
         let excess = self.recent.len().saturating_sub(RECENT_ANOMALIES);
         self.recent.drain(..excess);
         let idle: Vec<String> =
@@ -192,6 +267,20 @@ impl Daemon {
             let m = self.log.remove(&id, now);
             self.apply(&m, now);
         }
+    }
+
+    /// A day's history (today when `date` is None), and the dates there are.
+    pub fn history(&self, date: Option<&str>) -> Option<HistoryView> {
+        let day = match date {
+            None => self.history.today().clone(),
+            Some(d) => self.history.day(d)?,
+        };
+        Some(HistoryView { dates: self.history.dates(), day })
+    }
+
+    /// Write history that hasn't been saved yet (on shutdown).
+    pub fn save_history(&mut self, now: f64) {
+        self.history.save(now);
     }
 
     /// The list served at /v1/agents.
@@ -244,6 +333,14 @@ pub struct AgentView {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct HistoryView {
+    /// Dates with history, newest first.
+    pub dates: Vec<String>,
+    #[serde(flatten)]
+    pub day: Day,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Snapshot {
     pub agents: Vec<AgentView>,
     #[serde(default)]
@@ -261,6 +358,7 @@ pub fn router(state: Shared, port: u16) -> Router {
         .route("/v1/metrics", post(|| async { Json(serde_json::json!({})) }))
         .route("/v1/traces", post(|| async { Json(serde_json::json!({})) }))
         .route("/v1/agents", get(agents))
+        .route("/v1/history", get(history_day))
         .route("/v1/stream", get(stream))
         .layer(DefaultBodyLimit::max(MAX_BODY))
         .layer(middleware::from_fn(move |req: Request, next: Next| local_only(req, next, port)))
@@ -322,6 +420,19 @@ async fn hook(State(state): State<Shared>, headers: HeaderMap, body: Bytes) -> R
 
 async fn agents(State(state): State<Shared>) -> Json<Snapshot> {
     Json(state.lock().unwrap_or_else(|e| e.into_inner()).snapshot(now_ms()))
+}
+
+#[derive(Deserialize)]
+struct HistoryQuery {
+    date: Option<String>,
+}
+
+async fn history_day(State(state): State<Shared>, Query(q): Query<HistoryQuery>) -> Response {
+    let view = state.lock().unwrap_or_else(|e| e.into_inner()).history(q.date.as_deref());
+    match view {
+        Some(v) => Json(v).into_response(),
+        None => (StatusCode::NOT_FOUND, "no history for that date").into_response(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -436,7 +547,11 @@ pub fn spawn_ticker(state: Shared) {
 
 /// Run the service until Ctrl-C (or SIGTERM).
 pub async fn serve(port: u16) -> std::io::Result<()> {
-    let state: Shared = Arc::new(Mutex::new(Daemon::new()));
+    // A service on another port keeps its own history (a test run doesn't
+    // mix into the real one).
+    let dir = history::default_dir()
+        .map(|d| if port == crate::DEFAULT_PORT { d } else { d.with_file_name(format!("history-{port}")) });
+    let state: Shared = Arc::new(Mutex::new(Daemon::with_history(dir)));
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     spawn_ticker(state.clone());
     let shutdown = async {
@@ -447,8 +562,10 @@ pub async fn serve(port: u16) -> std::io::Result<()> {
         }
     };
     // Open streams never end on their own, so shutting down doesn't wait for them.
-    tokio::select! {
-        r = axum::serve(listener, router(state, port)) => r,
+    let r = tokio::select! {
+        r = axum::serve(listener, router(state.clone(), port)) => r,
         _ = shutdown => Ok(()),
-    }
+    };
+    state.lock().unwrap_or_else(|e| e.into_inner()).save_history(now_ms());
+    r
 }
