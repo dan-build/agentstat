@@ -598,7 +598,7 @@ machine: Claude Code sessions and their subagents today, anything that speaks
 OpenTelemetry through `agentstat run`. macOS 12 or later, Apple Silicon and Intel.
 
 ```bash
-curl -fsSL https://github.com/dan-build/agentstat/releases/download/app-v0.1.1/install.sh | sh -s -- --app
+curl -fsSL https://github.com/dan-build/agentstat/releases/download/app-v0.2.0/install.sh | sh -s -- --app
 agentstat connect claude
 ```
 
@@ -619,6 +619,21 @@ until you say yes:
 `agentstat service uninstall` undo it. `agentstat watch` is a live table in the
 terminal; `agentstat --help` lists the rest.
 
+The app tells you when an agent needs you, with a macOS notification and in
+the menu bar:
+
+- **Notifications** when a session waits for your permission or answer,
+  finishes a turn that took a minute or more, ends with an error, or has a
+  critical stall or runaway. Click one to bring forward the app the session
+  runs in (Terminal, iTerm, VS Code, …). Turn them off in System Settings →
+  Notifications → AgentStat; when they're off, the app and `agentstat doctor`
+  say so.
+- **The menu bar item** shows who needs you ("1 needs you"), else how many
+  agents are working. Its menu lists them; choose one that needs you to bring
+  its app forward.
+- **Closing the window** hides AgentStat; it keeps watching from the menu bar.
+  Quit from the menu bar item or with Cmd-Q.
+
 ### Verify, don't trust
 
 AgentStat isn't notarized by Apple, on purpose: there's no company or
@@ -630,7 +645,7 @@ commit in this repository and signs a record of where every file came from.
 Check a download against it, and against the release's checksums:
 
 ```bash
-gh attestation verify AgentStat-0.1.1-macos-universal.dmg --repo dan-build/agentstat
+gh attestation verify AgentStat-0.2.0-macos-universal.dmg --repo dan-build/agentstat
 grep macos-universal.dmg SHA256SUMS | shasum -a 256 -c
 ```
 

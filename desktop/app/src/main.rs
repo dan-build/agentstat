@@ -272,7 +272,11 @@ impl AgentStatApp {
                         if self.notified.len() > 1_000 {
                             self.notified.clear();
                         }
+                        // Waiting on the person looks like a stall: they already
+                        // heard it needs them.
+                        let repeat = reason == "stalled" && self.needs.contains_key(&id);
                         if self.notifications
+                            && !repeat
                             && now - time < ATTENTION_FRESH_MS
                             && self.notified.insert((id.clone(), time.to_bits()))
                         {
