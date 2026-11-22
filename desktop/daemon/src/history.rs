@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-pub use agentstat_core::history::{Day, Record, is_date};
+pub use agentstat_core::history::{Budget, BudgetAlert, Day, Record, is_date};
 
 /// Days of files kept, today included.
 pub const KEEP_DAYS: usize = 7;
@@ -32,10 +32,44 @@ pub fn local_date(ms: f64) -> String {
     format!("{:04}-{:02}-{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday)
 }
 
-/// Where the files go: `~/Library/Application Support/AgentStat/history`.
-pub fn default_dir() -> Option<PathBuf> {
+fn support_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
-    Some(Path::new(&home).join("Library/Application Support/AgentStat/history"))
+    Some(Path::new(&home).join("Library/Application Support/AgentStat"))
+}
+
+/// Where the service on `port` keeps history: `…/AgentStat/history`, or
+/// `history-<port>` for another port (a test run doesn't mix into the real one).
+pub fn dir_for(port: u16) -> Option<PathBuf> {
+    let name = if port == crate::DEFAULT_PORT { "history".into() } else { format!("history-{port}") };
+    Some(support_dir()?.join(name))
+}
+
+/// The daily budget for the service on `port`: `…/AgentStat/budget.json`
+/// (`budget-<port>.json` for another port).
+pub fn budget_file(port: u16) -> Option<PathBuf> {
+    let name = if port == crate::DEFAULT_PORT { "budget.json".into() } else { format!("budget-{port}.json") };
+    Some(support_dir()?.join(name))
+}
+
+/// The budget in `path`; none set when it's missing or unreadable.
+pub fn read_budget(path: &Path) -> Budget {
+    std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+/// Write the budget (removing the file when nothing is set).
+pub fn write_budget(path: &Path, b: &Budget) -> std::io::Result<()> {
+    if !b.is_set() {
+        return match std::fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        };
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(b).map_err(std::io::Error::other)?)?;
+    std::fs::rename(tmp, path)
 }
 
 pub struct History {
@@ -72,6 +106,17 @@ impl History {
         }
         r.last = r.last.max(now);
         Some(r)
+    }
+
+    /// Budget alerts due today and not yet sent; they're recorded as sent.
+    pub fn alerts_due(&mut self, budget: &Budget, now: f64) -> Vec<BudgetAlert> {
+        self.roll(now);
+        let due = budget.due(&self.day);
+        if !due.is_empty() {
+            self.day.alerts.extend(due.iter().map(|a| a.key.clone()));
+            self.dirty = true;
+        }
+        due
     }
 
     /// Today's records.

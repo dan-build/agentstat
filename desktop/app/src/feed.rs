@@ -35,6 +35,8 @@ pub enum Feed {
 pub struct HistoryView {
     #[serde(default)]
     pub dates: Vec<String>,
+    #[serde(default)]
+    pub budget: agentstat_core::history::Budget,
     #[serde(flatten)]
     pub day: agentstat_core::history::Day,
 }

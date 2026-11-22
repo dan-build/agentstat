@@ -66,6 +66,8 @@ pub enum Reason {
     Stalled,
     /// Critical runaway (from the detectors).
     Runaway,
+    /// The day's cost or output tokens reached a share of the budget.
+    Budget,
 }
 
 /// Sessions tracked at once; records for more are ignored (a local process

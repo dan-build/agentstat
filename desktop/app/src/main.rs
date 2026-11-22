@@ -320,7 +320,13 @@ impl AgentStatApp {
                                 "runaway" => "running away",
                                 _ => "",
                             };
-                            let title = if what.is_empty() { name } else { format!("{name} · {what}") };
+                            let title = if reason == "budget" {
+                                "Daily budget".to_string()
+                            } else if what.is_empty() {
+                                name
+                            } else {
+                                format!("{name} · {what}")
+                            };
                             notify::post(&format!("{id}|{reason}|{time}"), &title, &message, app.as_deref());
                         }
                     }
@@ -883,6 +889,21 @@ impl AgentStatApp {
                 .child(label)
         };
         let cost = |c: f64| if c > 0.0 { fmt_cost(c) } else { "–".into() };
+        // Today's use of the daily budget (it applies to today only).
+        let budget_line = self.history.as_ref().filter(|_| self.history_date.is_none()).and_then(|h| {
+            let b = h.budget;
+            let share = |used: f64, limit: f64| format!("{:.0}%", used / limit * 100.0);
+            let parts: Vec<String> = [
+                b.daily_cost_usd.map(|l| format!("{} of {}", share(total.cost_usd, l), fmt_cost(l))),
+                b.daily_output_tokens.map(|l| {
+                    format!("{} of {} tok", share(total.output_tokens, l), agentstat_core::history::format_tokens(l))
+                }),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            (!parts.is_empty()).then(|| parts.join(" · "))
+        });
         // Columns after the project, right-aligned: (label, width).
         const COLS: [(&str, f32); 6] =
             [("Sessions", 64.), ("Working", 76.), ("Tokens", 72.), ("Cost", 64.), ("Tools", 52.), ("Anomalies", 72.)];
@@ -956,7 +977,8 @@ impl AgentStatApp {
                             .child(Self::stat(theme, "Working", fmt_duration(total.working_ms)))
                             .child(Self::stat(theme, "Output tokens", fmt_count(total.output_tokens)))
                             .child(Self::stat(theme, "Cost", cost(total.cost_usd)))
-                            .child(Self::stat(theme, "Anomalies", total.anomalies.to_string())),
+                            .child(Self::stat(theme, "Anomalies", total.anomalies.to_string()))
+                            .when_some(budget_line, |d, line| d.child(Self::stat(theme, "Budget", line))),
                     )
                     .child(if rows.is_empty() {
                         div().text_color(theme.text_tertiary).child("Nothing recorded on this day.").into_any_element()
