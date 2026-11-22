@@ -892,10 +892,11 @@ impl AgentStatApp {
         // Today's use of the daily budget (it applies to today only).
         let budget_line = self.history.as_ref().filter(|_| self.history_date.is_none()).and_then(|h| {
             let b = h.budget;
+            let ok = |l: &f64| l.is_finite() && *l > 0.0;
             let share = |used: f64, limit: f64| format!("{:.0}%", used / limit * 100.0);
             let parts: Vec<String> = [
-                b.daily_cost_usd.map(|l| format!("{} of {}", share(total.cost_usd, l), fmt_cost(l))),
-                b.daily_output_tokens.map(|l| {
+                b.daily_cost_usd.filter(ok).map(|l| format!("{} of {}", share(total.cost_usd, l), fmt_cost(l))),
+                b.daily_output_tokens.filter(ok).map(|l| {
                     format!("{} of {} tok", share(total.output_tokens, l), agentstat_core::history::format_tokens(l))
                 }),
             ]

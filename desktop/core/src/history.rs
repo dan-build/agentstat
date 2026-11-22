@@ -38,7 +38,7 @@ impl Record {
 pub struct Day {
     pub date: String,
     pub agents: BTreeMap<String, Record>,
-    /// Budget alerts already sent that day ("cost-80", "tokens-100", …).
+    /// Budget alerts already sent that day: step and limit ("cost-80@20", …).
     pub alerts: Vec<String>,
 }
 
@@ -56,6 +56,9 @@ pub const BUDGET_STEPS: [u32; 2] = [80, 100];
 /// One budget alert due: its key (for [`Day::alerts`]) and what to say.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BudgetAlert {
+    /// Which limit: "cost" or "tokens".
+    pub what: &'static str,
+    /// The step and the limit it was for: changing the limit starts afresh.
     pub key: String,
     pub message: String,
 }
@@ -77,9 +80,9 @@ impl Budget {
             let Some(step) = BUDGET_STEPS.iter().rev().find(|s| used >= limit * **s as f64 / 100.0) else {
                 continue;
             };
-            let key = format!("{what}-{step}");
-            // Already sent, or a higher step was.
-            let sent = |s: u32| day.alerts.contains(&format!("{what}-{s}"));
+            let key = format!("{what}-{step}@{limit}");
+            // Already sent for this limit, or a higher step was.
+            let sent = |s: u32| day.alerts.contains(&format!("{what}-{s}@{limit}"));
             if BUDGET_STEPS.iter().any(|s| s >= step && sent(*s)) {
                 continue;
             }
@@ -93,7 +96,7 @@ impl Budget {
             } else {
                 format!("Today's {noun} reached {used}, {step}% of the {limit} budget")
             };
-            out.push(BudgetAlert { key, message });
+            out.push(BudgetAlert { what, key, message });
         }
         out
     }
@@ -189,7 +192,7 @@ mod tests {
         assert_eq!(b.due(&day), vec![]);
         day.agents.insert("a".into(), rec(8.5, 10.0));
         let due = b.due(&day);
-        assert_eq!(due[0].key, "cost-80");
+        assert_eq!(due[0].key, "cost-80@10");
         assert_eq!(due[0].message, "Today's cost reached $8.50, 80% of the $10.00 budget");
         day.alerts.push(due[0].key.clone());
         assert_eq!(b.due(&day), vec![]);
@@ -199,11 +202,14 @@ mod tests {
         assert_eq!(due.len(), 1);
         assert_eq!(
             (due[0].key.as_str(), due[0].message.as_str()),
-            ("tokens-100", "Today's output tokens reached 1.2M, over the 1.0M budget")
+            ("tokens-100@1000000", "Today's output tokens reached 1.2M, over the 1.0M budget")
         );
         day.alerts.push(due[0].key.clone());
         assert_eq!(b.due(&day), vec![]);
         assert!(Budget::default().due(&day).is_empty());
+        // A raised limit starts afresh: its own 80% alerts again.
+        let raised = Budget { daily_cost_usd: Some(10.5), daily_output_tokens: Some(1_000_000.0) };
+        assert_eq!(raised.due(&day).iter().map(|a| a.key.as_str()).collect::<Vec<_>>(), vec!["cost-80@10.5"]);
     }
 
     #[test]

@@ -296,11 +296,11 @@ fn crossing_the_daily_budget_alerts_once() {
     assert!(d.history(None).unwrap().day.alerts.is_empty());
     d.ingest_logs(&call(0.4, now + 1_000.0), now + 1_000.0);
     d.tick(now + 1_000.0);
-    assert_eq!(d.history(None).unwrap().day.alerts, vec!["cost-80"]);
+    assert_eq!(d.history(None).unwrap().day.alerts, vec!["cost-80@1"]);
     d.ingest_logs(&call(0.4, now + 2_000.0), now + 2_000.0);
     d.tick(now + 2_000.0);
     d.tick(now + 2_500.0);
     let view = d.history(None).unwrap();
-    assert_eq!(view.day.alerts, vec!["cost-80", "cost-100"]);
+    assert_eq!(view.day.alerts, vec!["cost-80@1", "cost-100@1"]);
     assert_eq!(view.budget.daily_cost_usd, Some(1.0));
 }

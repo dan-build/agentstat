@@ -51,9 +51,14 @@ pub fn budget_file(port: u16) -> Option<PathBuf> {
     Some(support_dir()?.join(name))
 }
 
-/// The budget in `path`; none set when it's missing or unreadable.
-pub fn read_budget(path: &Path) -> Budget {
-    std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+/// The budget in `path` (none set when there's no file); an error when the
+/// file can't be read or isn't a budget.
+pub fn read_budget(path: &Path) -> Result<Budget, String> {
+    match std::fs::read_to_string(path) {
+        Ok(t) => serde_json::from_str(&t).map_err(|e| format!("not a budget ({e})")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Budget::default()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Write the budget (removing the file when nothing is set).

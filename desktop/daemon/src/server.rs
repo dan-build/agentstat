@@ -297,13 +297,19 @@ impl Daemon {
                 let seen = std::fs::metadata(path).and_then(|m| m.modified()).ok();
                 if seen != self.budget_seen {
                     self.budget_seen = seen;
-                    self.budget = history::read_budget(path);
+                    // A file that can't be read keeps the budget there was.
+                    match history::read_budget(path) {
+                        Ok(b) => self.budget = b,
+                        Err(e) => eprintln!("agentstat: ignoring {}: {e}", path.display()),
+                    }
                 }
             }
         }
         if self.budget.is_set() {
             for a in self.history.alerts_due(&self.budget, now) {
-                self.log.attention(BUDGET_ID, Reason::Budget, a.message, None, now);
+                // One id per limit: two alerts in one tick are two notifications.
+                let id = format!("{BUDGET_ID}:{}", a.what);
+                self.log.attention(&id, Reason::Budget, a.message, None, now);
             }
         }
     }

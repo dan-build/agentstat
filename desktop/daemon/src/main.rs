@@ -422,8 +422,16 @@ fn budget(port: u16, word: Option<&str>, cost: Option<f64>, tokens: Option<f64>)
     use agentstat_core::history::{Budget, format_tokens, summarize};
     use agentstat_daemon::history::{budget_file, read_budget, write_budget};
     let Some(path) = budget_file(port) else { return fail("HOME isn't set") };
-    let mut b = read_budget(&path);
+    let mut b = match read_budget(&path) {
+        Ok(b) => b,
+        // Don't overwrite what someone wrote by hand; `off` replaces it.
+        Err(_) if word == Some("off") => Budget::default(),
+        Err(e) => return fail(&format!("{}: {e} (fix it, or start over with `agentstat budget off`)", path.display())),
+    };
     match word {
+        Some("off") if cost.is_some() || tokens.is_some() => {
+            return fail("`off` removes the whole budget; to change one limit, give just --cost or --tokens");
+        }
         Some("off") => b = Budget::default(),
         Some(other) => return fail(&format!("unexpected argument `{other}` (budget takes --cost, --tokens or off)")),
         None => {
