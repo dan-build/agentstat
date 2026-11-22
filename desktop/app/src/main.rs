@@ -127,6 +127,8 @@ struct AgentStatApp {
     history_date: Option<String>,
     history: Option<feed::HistoryView>,
     history_asked: f64,
+    /// The latest history request; answers to older ones are dropped.
+    history_request: u64,
     calls: HashMap<String, Calls>,
     /// When each agent's last event arrived (app clock), so a silent agent
     /// doesn't keep the chart redrawing fast.
@@ -227,6 +229,7 @@ impl AgentStatApp {
             history_date: None,
             history: None,
             history_asked: f64::NEG_INFINITY,
+            history_request: 0,
         }
     }
 
@@ -246,10 +249,10 @@ impl AgentStatApp {
             }
             Feed::Disconnected => self.conn = Conn::Reconnecting,
             Feed::NoService => self.conn = Conn::NoService,
-            Feed::History(view) => {
-                // An answer for a day no longer shown is dropped.
-                if let Some(v) = view
-                    && (self.history_date.is_none() || self.history_date.as_deref() == Some(v.day.date.as_str()))
+            Feed::History(request, view) => {
+                // Only the latest request's answer: an older one is for a day no longer shown.
+                if request == self.history_request
+                    && let Some(v) = view
                 {
                     self.history = Some(v);
                 }
@@ -376,7 +379,8 @@ impl AgentStatApp {
     /// Ask the service for the shown day's history.
     fn ask_history(&mut self, now: f64) {
         self.history_asked = now;
-        feed::fetch_history(self.port, self.history_date.clone(), self.feed_tx.clone());
+        self.history_request += 1;
+        feed::fetch_history(self.port, self.history_date.clone(), self.history_request, self.feed_tx.clone());
     }
 
     /// Show another day: `delta` days back (+) or forward (-) among those kept.
@@ -396,12 +400,11 @@ impl AgentStatApp {
     fn tick(&mut self, cx: &mut Context<Self>) {
         let now = now_ms();
         let every = if self.today { HISTORY_SHOWN_MS } else { HISTORY_HIDDEN_MS };
-        // Past days don't change; the sidebar's summary is always today's.
-        let stale = self.history_date.is_none() || self.today;
-        if stale && now - self.history_asked >= every {
-            if !self.today {
-                self.history_date = None;
-            }
+        // Out of the Today view, the sidebar's summary is today's.
+        if !self.today && self.history_date.is_some() {
+            self.history_date = None;
+            self.ask_history(now);
+        } else if now - self.history_asked >= every {
             self.ask_history(now);
         }
         let state = self.menubar_state(now);

@@ -17,6 +17,10 @@ pub const SAVE_EVERY_MS: f64 = 30_000.0;
 /// Agents recorded per day; more are ignored (bounds the file).
 pub const MAX_RECORDS: usize = 500;
 
+unsafe extern "C" {
+    fn tzset();
+}
+
 /// The local calendar date of `ms` (since the epoch), as `YYYY-MM-DD`.
 pub fn local_date(ms: f64) -> String {
     let secs = (ms / 1000.0).floor() as libc::time_t;
@@ -47,9 +51,10 @@ impl History {
     /// older than [`KEEP_DAYS`].
     pub fn open(dir: Option<PathBuf>, now: f64) -> Self {
         let date = local_date(now);
-        let day = dir.as_deref().and_then(|d| read_day(d, &date)).unwrap_or(Day { date, ..Day::default() });
+        let day =
+            dir.as_deref().and_then(|d| read_day_or_set_aside(d, &date)).unwrap_or(Day { date, ..Day::default() });
         let h = History { dir, day, dirty: false, saved_at: now };
-        h.prune();
+        h.prune(now);
         h
     }
 
@@ -105,6 +110,9 @@ impl History {
 
     /// Write the day if it changed and the last write was long enough ago.
     pub fn maybe_save(&mut self, now: f64) {
+        // Follow a time zone change (travel) without a restart.
+        // SAFETY: tzset only reloads the C library's time zone state.
+        unsafe { tzset() };
         self.roll(now);
         if self.dirty && now - self.saved_at >= SAVE_EVERY_MS {
             self.save(now);
@@ -129,13 +137,15 @@ impl History {
         if date != self.day.date {
             self.save(now);
             self.day = Day { date, ..Day::default() };
-            self.prune();
+            self.prune(now);
         }
     }
 
-    fn prune(&self) {
+    /// Delete days older than [`KEEP_DAYS`] (by date, however many there are).
+    fn prune(&self, now: f64) {
         let Some(dir) = self.dir.as_deref() else { return };
-        for old in self.dates().into_iter().skip(KEEP_DAYS) {
+        let oldest = local_date(now - (KEEP_DAYS as f64 - 1.0) * 86_400_000.0);
+        for old in self.dates().into_iter().filter(|d| *d < oldest) {
             let _ = std::fs::remove_file(dir.join(format!("{old}.json")));
         }
     }
@@ -148,11 +158,27 @@ fn read_day(dir: &Path, date: &str) -> Option<Day> {
     Some(day)
 }
 
+/// Today's file from an earlier run. One that can't be read is renamed
+/// `.bad`, not overwritten, so a damaged day can still be recovered by hand.
+fn read_day_or_set_aside(dir: &Path, date: &str) -> Option<Day> {
+    let path = dir.join(format!("{date}.json"));
+    if !path.exists() {
+        return None;
+    }
+    let day = read_day(dir, date);
+    if day.is_none() {
+        let _ = std::fs::rename(&path, dir.join(format!("{date}.json.bad")));
+    }
+    day
+}
+
 /// Atomically: a half-written file never replaces a good one.
 fn write_day(dir: &Path, day: &Day) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let tmp = dir.join(format!(".{}.json.tmp", day.date));
-    std::fs::write(&tmp, serde_json::to_vec(day).map_err(std::io::Error::other)?)?;
+    let mut f = std::fs::File::create(&tmp)?;
+    std::io::Write::write_all(&mut f, &serde_json::to_vec(day).map_err(std::io::Error::other)?)?;
+    f.sync_all()?;
     std::fs::rename(tmp, dir.join(format!("{}.json", day.date)))
 }
 
@@ -211,6 +237,19 @@ mod tests {
             h.save(now);
         }
         assert_eq!(h.dates().len(), KEEP_DAYS);
+        // Sporadic use: a day far older than a week goes, however few there are.
+        let dir2 = tmp_dir("sparse");
+        let mut s = History::open(Some(dir2.clone()), day0);
+        s.record("s", Some("api"), day0).unwrap();
+        s.save(day0);
+        s.record("s", Some("api"), day0 + 30.0 * 86_400_000.0).unwrap();
+        assert_eq!(s.dates(), vec![local_date(day0 + 30.0 * 86_400_000.0)]);
+        // A damaged file is set aside, not overwritten.
+        let today = local_date(day0 + 30.0 * 86_400_000.0);
+        std::fs::write(dir2.join(format!("{today}.json")), "{not json").unwrap();
+        let _ = History::open(Some(dir2.clone()), day0 + 30.0 * 86_400_000.0);
+        assert!(dir2.join(format!("{today}.json.bad")).exists());
+        let _ = std::fs::remove_dir_all(dir2);
         for i in 0..MAX_RECORDS + 5 {
             h.record(&format!("x{i}"), None, day0 + 9.0 * 86_400_000.0);
         }

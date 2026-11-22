@@ -26,7 +26,8 @@ pub enum Feed {
     NoService,
     Message(Message),
     /// A day of history (see [`fetch_history`]); None when it couldn't be read.
-    History(Option<HistoryView>),
+    /// Tagged with its request, so a late answer can't replace a newer one.
+    History(u64, Option<HistoryView>),
 }
 
 /// `GET /v1/history`: a day's records and the dates there are.
@@ -54,14 +55,14 @@ fn get(port: u16, path: &str) -> Option<String> {
 
 /// Read a day of history (today when `date` is None) on a background thread;
 /// the answer arrives as [`Feed::History`].
-pub fn fetch_history(port: u16, date: Option<String>, tx: UnboundedSender<Feed>) {
+pub fn fetch_history(port: u16, date: Option<String>, request: u64, tx: UnboundedSender<Feed>) {
     std::thread::spawn(move || {
         let path = match &date {
             Some(d) if agentstat_core::history::is_date(d) => format!("/v1/history?date={d}"),
             _ => "/v1/history".to_string(),
         };
         let view = get(port, &path).and_then(|b| serde_json::from_str::<HistoryView>(&b).ok());
-        let _ = tx.unbounded_send(Feed::History(view));
+        let _ = tx.unbounded_send(Feed::History(request, view));
     });
 }
 
