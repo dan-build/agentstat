@@ -48,7 +48,7 @@ cp "$APP_BIN" "$app/Contents/MacOS/agentstat-app"
 cp "$cli" "$app/Contents/MacOS/agentstat"
 sed "s/@VERSION@/$VERSION/g" "$here/Info.plist" > "$app/Contents/Info.plist"
 printf 'APPL????' > "$app/Contents/PkgInfo"
-# TODO: add AppIcon.icns to Contents/Resources and CFBundleIconFile to Info.plist.
+cp "$here/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
 
 # Inner executables first, then the bundle that seals them.
 codesign --force --sign - --identifier "$BUNDLE_ID.app" "$app/Contents/MacOS/agentstat-app"
