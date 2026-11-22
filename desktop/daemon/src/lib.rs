@@ -5,6 +5,7 @@
 
 pub mod claude;
 pub mod client;
+pub mod history;
 pub mod otlp;
 pub mod server;
 pub mod setup;

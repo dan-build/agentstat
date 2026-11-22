@@ -41,6 +41,10 @@ const NOTIFY_CHECK_MS: f64 = 30_000.0;
 const BUNDLE_ID: &str = "io.github.dan-build.agentstat";
 /// Agents listed in the menu bar item's menu.
 const MENU_LINES: usize = 15;
+/// History is re-read this often while the Today view shows, else this often
+/// (for the sidebar's summary).
+const HISTORY_SHOWN_MS: f64 = 5_000.0;
+const HISTORY_HIDDEN_MS: f64 = 60_000.0;
 /// Redraw interval while the chart scrolls: a 60 s window moves under half a
 /// pixel per frame at this rate, so it looks continuous for a fraction of the
 /// cost of every display frame.
@@ -114,6 +118,17 @@ struct AgentStatApp {
     /// Agents waiting on the person: (since, message, app it runs in).
     needs: HashMap<String, (f64, String, Option<String>)>,
     menubar: menubar::MenuBar,
+    /// The service's port and the feed's sender (history answers arrive there).
+    port: u16,
+    feed_tx: futures::channel::mpsc::UnboundedSender<Feed>,
+    /// The Today view is showing (instead of an agent).
+    today: bool,
+    /// The day shown (None: today), its records, and when they were asked for.
+    history_date: Option<String>,
+    history: Option<feed::HistoryView>,
+    history_asked: f64,
+    /// The latest history request; answers to older ones are dropped.
+    history_request: u64,
     calls: HashMap<String, Calls>,
     /// When each agent's last event arrived (app clock), so a silent agent
     /// doesn't keep the chart redrawing fast.
@@ -157,6 +172,7 @@ impl AgentStatApp {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let port = std::env::var("AGENTSTAT_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(4318);
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
+        let feed_tx = tx.clone();
         feed::spawn(port, tx);
         cx.spawn(async move |this, cx| {
             while let Some(f) = rx.next().await {
@@ -207,6 +223,13 @@ impl AgentStatApp {
             notify_checked: 0.0,
             needs: HashMap::new(),
             menubar: menubar::MenuBar::new(),
+            port,
+            feed_tx,
+            today: false,
+            history_date: None,
+            history: None,
+            history_asked: f64::NEG_INFINITY,
+            history_request: 0,
         }
     }
 
@@ -226,6 +249,14 @@ impl AgentStatApp {
             }
             Feed::Disconnected => self.conn = Conn::Reconnecting,
             Feed::NoService => self.conn = Conn::NoService,
+            Feed::History(request, view) => {
+                // Only the latest request's answer: an older one is for a day no longer shown.
+                if request == self.history_request
+                    && let Some(v) = view
+                {
+                    self.history = Some(v);
+                }
+            }
             Feed::Message(m) => {
                 if self.conn != Conn::Live {
                     self.conn = Conn::Live;
@@ -345,8 +376,37 @@ impl AgentStatApp {
         state
     }
 
+    /// Ask the service for the shown day's history.
+    fn ask_history(&mut self, now: f64) {
+        self.history_asked = now;
+        self.history_request += 1;
+        feed::fetch_history(self.port, self.history_date.clone(), self.history_request, self.feed_tx.clone());
+    }
+
+    /// Show another day: `delta` days back (+) or forward (-) among those kept.
+    fn step_day(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some(h) = &self.history else { return };
+        let at = h.dates.iter().position(|d| *d == h.day.date).unwrap_or(0);
+        let next = (at as isize + delta).clamp(0, h.dates.len() as isize - 1) as usize;
+        // Dates are newest first: index 0 is today.
+        let date = (next > 0).then(|| h.dates[next].clone());
+        if date != self.history_date {
+            self.history_date = date;
+            self.ask_history(now_ms());
+            cx.notify();
+        }
+    }
+
     fn tick(&mut self, cx: &mut Context<Self>) {
         let now = now_ms();
+        let every = if self.today { HISTORY_SHOWN_MS } else { HISTORY_HIDDEN_MS };
+        // Out of the Today view, the sidebar's summary is today's.
+        if !self.today && self.history_date.is_some() {
+            self.history_date = None;
+            self.ask_history(now);
+        } else if now - self.history_asked >= every {
+            self.ask_history(now);
+        }
         let state = self.menubar_state(now);
         self.menubar.update(&state);
         if self.notifications && now - self.notify_checked >= NOTIFY_CHECK_MS {
@@ -467,6 +527,10 @@ fn fmt_count(v: f64) -> String {
     out
 }
 
+fn fmt_cost(usd: f64) -> String {
+    if usd < 0.01 { "<$0.01".into() } else { format!("${usd:.2}") }
+}
+
 fn fmt_duration(ms: f64) -> String {
     let s = (ms / 1000.0).floor().max(0.0) as u64;
     match s {
@@ -540,6 +604,7 @@ impl AgentStatApp {
             None => 0,
         };
         self.selected = Some(ids[next].clone());
+        self.today = false;
         self.keyboard = true;
         cx.notify();
     }
@@ -578,9 +643,10 @@ impl AgentStatApp {
             Conn::NoService => (theme.critical, "No service"),
         };
         let span = Span { now: self.paused_at().unwrap_or(now), window_ms: WINDOW_MS };
+        let today = self.today_row(theme, cx);
         let rows = self.store.agents().enumerate().map(|(i, a)| {
             let id = a.id.clone();
-            let selected = self.selected.as_deref() == Some(a.id.as_str());
+            let selected = !self.today && self.selected.as_deref() == Some(a.id.as_str());
             let stats = self.store.stats(&a.id, now);
             let tool = stats.as_ref().and_then(|s| s.tool.clone());
             let status_ms = stats.as_ref().map_or(0.0, |s| s.status_ms);
@@ -613,6 +679,7 @@ impl AgentStatApp {
                 .tooltip(tip(a.name.clone(), *theme))
                 .on_click(cx.listener(move |app, _: &ClickEvent, _, cx| {
                     app.selected = Some(id.clone());
+                    app.today = false;
                     app.keyboard = false;
                     cx.notify();
                 }))
@@ -700,7 +767,18 @@ impl AgentStatApp {
                             .child(conn_text),
                     ),
             )
-            .child(div().id("fleet").flex_1().overflow_y_scroll().pb_3().flex().flex_col().gap_0p5().children(rows))
+            .child(
+                div()
+                    .id("fleet")
+                    .flex_1()
+                    .overflow_y_scroll()
+                    .pb_3()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(today)
+                    .children(rows),
+            )
             .when(self.notifications && self.notify_off, |d| {
                 d.child(
                     div()
@@ -736,6 +814,160 @@ impl AgentStatApp {
                         ),
                 )
             })
+    }
+
+    /// The sidebar's first row: today so far, and the way into the Today view.
+    fn today_row(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let today = self.history.as_ref().filter(|_| self.history_date.is_none());
+        let summary = today.map(|h| agentstat_core::history::summarize(&h.day).1).filter(|t| t.sessions > 0);
+        let line = match &summary {
+            Some(t) if t.cost_usd > 0.0 => format!("{} working · {}", fmt_duration(t.working_ms), fmt_cost(t.cost_usd)),
+            Some(t) => format!("{} working · {} sessions", fmt_duration(t.working_ms), t.sessions),
+            None => "Nothing recorded yet".into(),
+        };
+        div()
+            .id("today")
+            .mx_2()
+            .mb_1()
+            .px_3()
+            .py_2()
+            .rounded_md()
+            .border_1()
+            .border_color(gpui::transparent_black())
+            .flex()
+            .flex_col()
+            .gap_0p5()
+            .cursor_pointer()
+            .when(self.today, |d| d.bg(theme.selected))
+            .hover(|d| d.bg(theme.selected))
+            .on_click(cx.listener(|app, _: &ClickEvent, _, cx| {
+                app.today = true;
+                app.keyboard = false;
+                app.history_date = None;
+                app.ask_history(now_ms());
+                cx.notify();
+            }))
+            .child(div().font(ui_font(FontWeight::MEDIUM)).child("Today"))
+            .child(div().text_size(px(12.)).text_color(theme.text_tertiary).child(line))
+            .into_any_element()
+    }
+
+    /// A day's work by project: the Today view (and the week before it).
+    fn today_view(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        use agentstat_core::history::{Row, summarize};
+        let (rows, total) = self.history.as_ref().map(|h| summarize(&h.day)).unwrap_or_default();
+        let (title, older, newer) = match &self.history {
+            Some(h) => {
+                let at = h.dates.iter().position(|d| *d == h.day.date).unwrap_or(0);
+                let title = if at == 0 { "Today".to_string() } else { h.day.date.clone() };
+                (title, at + 1 < h.dates.len(), at > 0)
+            }
+            None => ("Today".to_string(), false, false),
+        };
+        let arrow = |id: &'static str, label: &'static str, enabled: bool, delta: isize, cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .h(px(28.))
+                .w(px(28.))
+                .rounded_md()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(if enabled { theme.text_secondary } else { theme.text_tertiary })
+                .when(enabled, |d| {
+                    d.cursor_pointer()
+                        .bg(theme.selected)
+                        .hover(|d| d.text_color(theme.text))
+                        .on_click(cx.listener(move |app, _: &ClickEvent, _, cx| app.step_day(delta, cx)))
+                })
+                .child(label)
+        };
+        let cost = |c: f64| if c > 0.0 { fmt_cost(c) } else { "–".into() };
+        // Columns after the project, right-aligned: (label, width).
+        const COLS: [(&str, f32); 6] =
+            [("Sessions", 64.), ("Working", 76.), ("Tokens", 72.), ("Cost", 64.), ("Tools", 52.), ("Anomalies", 72.)];
+        let cells = |r: &Row| {
+            [
+                r.sessions.to_string(),
+                fmt_duration(r.working_ms),
+                fmt_count(r.output_tokens),
+                cost(r.cost_usd),
+                r.tools.to_string(),
+                r.anomalies.to_string(),
+            ]
+        };
+        let row = |name: String, values: [String; 6], muted: bool, strong: bool| {
+            div()
+                .py_2()
+                .flex()
+                .items_center()
+                .border_b_1()
+                .border_color(theme.border)
+                .text_color(if muted { theme.text_tertiary } else { theme.text })
+                .when(muted, |d| d.text_size(px(12.)))
+                .when(strong, |d| d.font(ui_font(FontWeight::MEDIUM)))
+                .child(div().flex_1().min_w_0().truncate().child(name))
+                .children(
+                    COLS.iter()
+                        .zip(values)
+                        .map(|((_, w), v)| div().w(px(*w)).flex_shrink_0().flex().justify_end().child(v)),
+                )
+        };
+        let table = div()
+            .flex()
+            .flex_col()
+            .child(row("Project".into(), COLS.map(|(l, _)| l.to_string()), true, false))
+            .children(rows.iter().map(|r| row(r.project.clone(), cells(r), false, false)))
+            .when(rows.len() > 1, |d| d.child(row("All".into(), cells(&total), false, true)));
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .h(px(BAR))
+                    .flex_shrink_0()
+                    .px_8()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .window_control_area(WindowControlArea::Drag)
+                    .child(div().flex_1().font(ui_font(FontWeight::SEMIBOLD)).child(title))
+                    .child(arrow("day-older", "‹", older, 1, cx))
+                    .child(arrow("day-newer", "›", newer, -1, cx)),
+            )
+            .child(
+                div()
+                    .id("today-body")
+                    .flex_1()
+                    .overflow_y_scroll()
+                    .px_8()
+                    .pt_2()
+                    .pb_6()
+                    .flex()
+                    .flex_col()
+                    .gap_6()
+                    .child(
+                        div()
+                            .flex()
+                            .gap_10()
+                            .child(Self::stat(theme, "Sessions", total.sessions.to_string()))
+                            .child(Self::stat(theme, "Working", fmt_duration(total.working_ms)))
+                            .child(Self::stat(theme, "Output tokens", fmt_count(total.output_tokens)))
+                            .child(Self::stat(theme, "Cost", cost(total.cost_usd)))
+                            .child(Self::stat(theme, "Anomalies", total.anomalies.to_string())),
+                    )
+                    .child(if rows.is_empty() {
+                        div().text_color(theme.text_tertiary).child("Nothing recorded on this day.").into_any_element()
+                    } else {
+                        table.into_any_element()
+                    })
+                    .child(div().text_size(px(12.)).text_color(theme.text_tertiary).child(
+                        "Working time adds up every session and subagent. Kept for 7 days, on this Mac only; \
+                         no prompt or response text.",
+                    )),
+            )
     }
 
     fn stat(theme: &Theme, label: &str, value: String) -> impl IntoElement {
@@ -1104,7 +1336,11 @@ impl Render for AgentStatApp {
             .on_action(cx.listener(|app, _: &SelectPrevious, _, cx| app.step(-1, cx)))
             .on_action(cx.listener(|app, _: &TogglePause, _, cx| app.toggle_pause(cx)))
             .child(self.sidebar(&theme, now, focused, cx))
-            .child(self.detail(&theme, now, cx))
+            .child(if self.today {
+                self.today_view(&theme, cx).into_any_element()
+            } else {
+                self.detail(&theme, now, cx).into_any_element()
+            })
     }
 }
 

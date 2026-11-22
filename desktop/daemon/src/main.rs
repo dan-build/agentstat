@@ -3,6 +3,7 @@
 //!   agentstat run -- claude …   run a command with its telemetry going to AgentStat
 //!   agentstat watch              live table of every agent
 //!   agentstat status             the table once
+//!   agentstat today              what each project did today
 //!   agentstat serve              run the service in the foreground
 //!   agentstat connect claude     set Claude Code up to report here (asks first)
 //!   agentstat service install    start the service at login
@@ -34,6 +35,10 @@ Usage:
   agentstat watch [--port N]     Live table of every agent (Ctrl-C to quit).
   agentstat mcp [--port N]       MCP server (stdio) so an agent can read the fleet.
   agentstat status [--port N]    Print the table once.
+  agentstat today [--port N] [--date YYYY-MM-DD]
+                                 What each project did today (or that day):
+                                 sessions, time working, tokens, cost,
+                                 anomalies. Kept for 7 days.
   agentstat serve [--port N]     Run the service in the foreground.
   agentstat service install|uninstall|status
                                  Start the service at login (launchd), or stop.
@@ -66,6 +71,7 @@ fn main() -> ExitCode {
     let takes_word = matches!(cmd.as_str(), "connect" | "disconnect" | "service");
     let mut word: Option<&str> = None;
     let mut confirm = setup::Confirm::default();
+    let mut date: Option<String> = None;
     let mut i = 0;
     while i < rest.len() {
         match rest[i].as_str() {
@@ -73,6 +79,13 @@ fn main() -> ExitCode {
                 port = match rest.get(i + 1).and_then(|p| parse_port(p)) {
                     Some(p) => p,
                     None => return fail("--port needs a port number (1–65535)"),
+                };
+                i += 2;
+            }
+            "--date" if cmd == "today" => {
+                date = match rest.get(i + 1).filter(|d| agentstat_daemon::history::is_date(d)) {
+                    Some(d) => Some(d.clone()),
+                    None => return fail("--date needs a date like 2026-11-21"),
                 };
                 i += 2;
             }
@@ -102,6 +115,7 @@ fn main() -> ExitCode {
         "run" => run(port, rest),
         "watch" => watch(port),
         "status" => status(port),
+        "today" => today(port, date.as_deref()),
         "mcp" => mcp(port),
         "connect" => setup::connect(word, port, confirm),
         "disconnect" => setup::disconnect(word, port, confirm),
@@ -327,6 +341,50 @@ fn mcp(port: u16) -> ExitCode {
         if reply(message).is_err() {
             break;
         }
+    }
+    ExitCode::SUCCESS
+}
+
+fn today(port: u16, date: Option<&str>) -> ExitCode {
+    use agentstat_core::history::{Day, summarize};
+    let path = date.map_or("/v1/history".to_string(), |d| format!("/v1/history?date={d}"));
+    let day: Day = match client::get(port, &path) {
+        Ok(body) => match serde_json::from_str(&body) {
+            Ok(d) => d,
+            Err(e) => return fail(&format!("unexpected answer from the service: {e}")),
+        },
+        Err(_) if !client::is_up(port) => {
+            return fail(&format!("no AgentStat service on port {port} (start it with `agentstat serve`)"));
+        }
+        Err(_) => return fail(&format!("no history for {}", date.unwrap_or("today"))),
+    };
+    let (rows, total) = summarize(&day);
+    if rows.is_empty() {
+        println!("Nothing recorded on {} yet.", day.date);
+        return ExitCode::SUCCESS;
+    }
+    println!(
+        "{:<22} {:>8} {:>9} {:>10} {:>9} {:>6} {:>6} {:>9}",
+        "PROJECT", "SESSIONS", "WORKING", "TOKENS", "COST", "TOOLS", "ERRORS", "ANOMALIES"
+    );
+    let line = |r: &agentstat_core::history::Row, name: &str| {
+        println!(
+            "{} {:>8} {:>9} {:>10.0} {:>9} {:>6} {:>6} {:>9}",
+            fit(name, 22),
+            r.sessions,
+            duration(r.working_ms),
+            r.output_tokens,
+            format!("${:.2}", r.cost_usd),
+            r.tools,
+            r.errors,
+            r.anomalies
+        );
+    };
+    for r in &rows {
+        line(r, &r.project);
+    }
+    if rows.len() > 1 {
+        line(&total, &format!("All ({})", day.date));
     }
     ExitCode::SUCCESS
 }
