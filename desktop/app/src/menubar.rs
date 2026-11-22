@@ -146,7 +146,10 @@ pub fn guard_key_window() {
             return;
         }
         let new: extern "C" fn(&Object, Sel, *mut Object) = did_become_key;
-        let old = objc::runtime::method_setImplementation(m, std::mem::transmute::<extern "C" fn(&Object, Sel, *mut Object), objc::runtime::Imp>(new));
+        let old = objc::runtime::method_setImplementation(
+            m,
+            std::mem::transmute::<extern "C" fn(&Object, Sel, *mut Object), objc::runtime::Imp>(new),
+        );
         let _ = ORIGINAL_DID_BECOME_KEY.set(old as usize);
     }
 }
