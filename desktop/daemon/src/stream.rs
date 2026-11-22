@@ -45,12 +45,23 @@ pub enum Body {
     Remove {
         id: String,
     },
+    /// Something the person should know about now: a notification for apps
+    /// that show them. Kept in history like events, so a client that connects
+    /// later can tell what is still pending (by `time`).
+    Attention {
+        id: String,
+        reason: crate::claude::Reason,
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        app: Option<String>,
+        time: f64,
+    },
 }
 
 impl Body {
     pub fn id(&self) -> &str {
         match self {
-            Body::Event { id, .. } | Body::Agent { id, .. } | Body::Remove { id } => id,
+            Body::Event { id, .. } | Body::Agent { id, .. } | Body::Remove { id } | Body::Attention { id, .. } => id,
         }
     }
 }
@@ -124,6 +135,18 @@ impl EventLog {
         let m = self.emit(body, now);
         self.info.insert(id.to_string(), m.clone());
         m
+    }
+
+    /// Report that an agent needs attention.
+    pub fn attention(
+        &mut self,
+        id: &str,
+        reason: crate::claude::Reason,
+        message: String,
+        app: Option<String>,
+        now: f64,
+    ) -> Arc<Message> {
+        self.emit(Body::Attention { id: id.to_string(), reason, message, app, time: now }, now)
     }
 
     /// Remove an agent, with its history, from clients.

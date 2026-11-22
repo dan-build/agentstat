@@ -5,10 +5,12 @@
 
 mod chart;
 mod feed;
+mod menubar;
+mod notify;
 mod theme;
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,12 +33,20 @@ const WINDOW_MS: f64 = 60_000.0;
 /// Health, detection and the status timers refresh this often.
 const TICK: Duration = Duration::from_millis(500);
 const RECENT_MAX: usize = 30;
+/// An attention message older than this when it arrives (replayed history)
+/// isn't notified.
+const ATTENTION_FRESH_MS: f64 = 30_000.0;
+/// How often to check whether macOS lets AgentStat notify.
+const NOTIFY_CHECK_MS: f64 = 30_000.0;
+const BUNDLE_ID: &str = "io.github.dan-build.agentstat";
+/// Agents listed in the menu bar item's menu.
+const MENU_LINES: usize = 15;
 /// Redraw interval while the chart scrolls: a 60 s window moves under half a
 /// pixel per frame at this rate, so it looks continuous for a fraction of the
 /// cost of every display frame.
 const SCROLL_FRAME: Duration = Duration::from_millis(40);
 
-actions!(agentstat, [SelectNext, SelectPrevious, TogglePause, Quit]);
+actions!(agentstat, [SelectNext, SelectPrevious, TogglePause, Quit, Hide]);
 
 fn now_ms() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64() * 1000.0)
@@ -94,6 +104,16 @@ struct Calls {
 
 struct AgentStatApp {
     store: Store,
+    /// Post macOS notifications (off with AGENTSTAT_NOTIFY=0).
+    notifications: bool,
+    /// Attention messages already notified: (agent, time bits).
+    notified: HashSet<(String, u64)>,
+    /// macOS has notifications off for AgentStat (checked every 30 s).
+    notify_off: bool,
+    notify_checked: f64,
+    /// Agents waiting on the person: (since, message, app it runs in).
+    needs: HashMap<String, (f64, String, Option<String>)>,
+    menubar: menubar::MenuBar,
     calls: HashMap<String, Calls>,
     /// When each agent's last event arrived (app clock), so a silent agent
     /// doesn't keep the chart redrawing fast.
@@ -178,6 +198,15 @@ impl AgentStatApp {
             chart_bounds: Rc::new(Cell::new(None)),
             reduce_motion: reduce_motion(),
             debug: std::env::var_os("AGENTSTAT_DEBUG").map(|_| (0, false, 0)),
+            notifications: std::env::var("AGENTSTAT_NOTIFY").map_or(true, |v| v != "0") && {
+                notify::prepare();
+                true
+            },
+            notified: HashSet::new(),
+            notify_off: false,
+            notify_checked: 0.0,
+            needs: HashMap::new(),
+            menubar: menubar::MenuBar::new(),
         }
     }
 
@@ -222,6 +251,10 @@ impl AgentStatApp {
                             }
                             c.total += 1;
                         }
+                        // Anything the agent does after asking means it was answered.
+                        if self.needs.get(&id).is_some_and(|(since, ..)| t > *since) {
+                            self.needs.remove(&id);
+                        }
                         self.heard.insert(id.clone(), now);
                         self.store.ensure(&id, t, now);
                         self.store.push(&id, &event, now);
@@ -230,7 +263,38 @@ impl AgentStatApp {
                         let band = config.map(|c| c.expected_tokens_per_sec);
                         self.store.describe(&id, name, color, band, now);
                     }
+                    Message::Attention { id, reason, message, app, time } => {
+                        if reason == "needs-you" {
+                            self.needs.insert(id.clone(), (time, message.clone(), app.clone()));
+                        }
+                        // Live ones only: history replayed on (re)connect was
+                        // either seen already or is too old to act on.
+                        if self.notified.len() > 1_000 {
+                            self.notified.clear();
+                        }
+                        // Waiting on the person looks like a stall: they already
+                        // heard it needs them.
+                        let repeat = reason == "stalled" && self.needs.contains_key(&id);
+                        if self.notifications
+                            && !repeat
+                            && now - time < ATTENTION_FRESH_MS
+                            && self.notified.insert((id.clone(), time.to_bits()))
+                        {
+                            let name = self.store.agent(&id).map(|a| a.name.clone()).unwrap_or_else(|| id.clone());
+                            let what = match reason.as_str() {
+                                "needs-you" => "needs you",
+                                "done" => "done",
+                                "failed" => "failed",
+                                "stalled" => "stalled",
+                                "runaway" => "running away",
+                                _ => "",
+                            };
+                            let title = if what.is_empty() { name } else { format!("{name} · {what}") };
+                            notify::post(&format!("{id}|{reason}|{time}"), &title, &message, app.as_deref());
+                        }
+                    }
                     Message::Remove { id } => {
+                        self.needs.remove(&id);
                         self.store.remove(&id);
                         self.calls.remove(&id);
                         self.heard.remove(&id);
@@ -248,8 +312,51 @@ impl AgentStatApp {
         cx.notify();
     }
 
+    /// The menu bar item's counts and lines: who needs you first, then who is working.
+    fn menubar_state(&self, now: f64) -> menubar::State {
+        let mut state = menubar::State::default();
+        let mut working = Vec::new();
+        for a in self.store.agents() {
+            if let Some((_, message, app)) = self.needs.get(&a.id) {
+                state.needs_you += 1;
+                state.lines.push(menubar::Line {
+                    text: format!("{} — {message}", a.name),
+                    app: app.clone(),
+                    needs_you: true,
+                });
+            } else if matches!(a.current.status, Status::Active | Status::Thinking | Status::Waiting) {
+                state.working += 1;
+                let stats = self.store.stats(&a.id, now);
+                let tool = stats.as_ref().and_then(|s| s.tool.clone());
+                // Whole minutes: the menu is rebuilt only when its text changes.
+                let mins = stats.as_ref().map_or(0.0, |s| (s.status_ms / 60_000.0).floor());
+                let word = status_line(a.current.status, tool.as_deref(), 0.0);
+                let word = word.split(" · ").next().unwrap_or_default();
+                let text = if mins >= 1.0 {
+                    format!("{} — {word} · {mins}m", a.name)
+                } else {
+                    format!("{} — {word}", a.name)
+                };
+                working.push(menubar::Line { text, app: None, needs_you: false });
+            }
+        }
+        state.lines.extend(working);
+        state.lines.truncate(MENU_LINES);
+        state
+    }
+
     fn tick(&mut self, cx: &mut Context<Self>) {
         let now = now_ms();
+        let state = self.menubar_state(now);
+        self.menubar.update(&state);
+        if self.notifications && now - self.notify_checked >= NOTIFY_CHECK_MS {
+            self.notify_checked = now;
+            let off = agentstat_core::macos::notifications_allowed_here(BUNDLE_ID) == Some(false);
+            if off != self.notify_off {
+                self.notify_off = off;
+                cx.notify();
+            }
+        }
         if let Some((renders, active, ticks)) = &mut self.debug {
             *ticks += 1;
             if *ticks == 10 {
@@ -594,6 +701,41 @@ impl AgentStatApp {
                     ),
             )
             .child(div().id("fleet").flex_1().overflow_y_scroll().pb_3().flex().flex_col().gap_0p5().children(rows))
+            .when(self.notifications && self.notify_off, |d| {
+                d.child(
+                    div()
+                        .flex_shrink_0()
+                        .mx_2()
+                        .mb_2()
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(theme.border)
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .text_size(px(12.))
+                        .child(div().text_color(theme.text_secondary).child("Notifications are off for AgentStat"))
+                        .child(
+                            div()
+                                .text_color(theme.text_tertiary)
+                                .child("You won't hear when an agent needs you or finishes."),
+                        )
+                        .child(
+                            div()
+                                .id("notify-settings")
+                                .text_color(theme.focus)
+                                .cursor_pointer()
+                                .on_click(|_: &ClickEvent, _, _| {
+                                    let _ = std::process::Command::new("/usr/bin/open")
+                                        .arg("x-apple.systempreferences:com.apple.preference.notifications")
+                                        .spawn();
+                                })
+                                .child("Turn on in Notifications settings…"),
+                        ),
+                )
+            })
     }
 
     fn stat(theme: &Theme, label: &str, value: String) -> impl IntoElement {
@@ -609,10 +751,11 @@ impl AgentStatApp {
         let agent = self.selected.as_deref().and_then(|id| self.store.agent(id));
         let Some(a) = agent else {
             let (title, hint) = match self.conn {
-                Conn::NoService => {
-                    ("The AgentStat service isn't installed", "Install it with: cargo install --path desktop/daemon")
-                }
-                _ => ("No agents yet", "Start one with: agentstat run -- claude"),
+                Conn::NoService => (
+                    "The agentstat command isn't installed",
+                    "Install it with the script on agentstat.sdaniel.cc/docs/macos-app",
+                ),
+                _ => ("No agents yet", "Connect Claude Code in a terminal: agentstat connect claude"),
             };
             return div()
                 .flex_1()
@@ -974,9 +1117,10 @@ fn main() {
             KeyBinding::new("k", SelectPrevious, Some("AgentStat")),
             KeyBinding::new("space", TogglePause, Some("AgentStat")),
             KeyBinding::new("cmd-q", Quit, None),
-            KeyBinding::new("cmd-w", Quit, None),
+            KeyBinding::new("cmd-w", Hide, None),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_action(|_: &Hide, _| menubar::hide_app());
         let bounds = Bounds::centered(None, size(px(1080.), px(680.)), cx);
         let window = cx
             .open_window(
@@ -996,12 +1140,14 @@ fn main() {
                 |window, cx| cx.new(|cx| AgentStatApp::new(window, cx)),
             )
             .expect("open window");
+        menubar::guard_key_window();
         window
             .update(cx, |_, window, cx| {
-                // Closing the window quits (the service keeps running for the agents).
-                window.on_window_should_close(cx, |_, cx| {
-                    cx.quit();
-                    true
+                // Closing the window hides AgentStat: it keeps notifying and stays
+                // in the menu bar. Quit from there or with Cmd-Q.
+                window.on_window_should_close(cx, |_, _| {
+                    menubar::hide_app();
+                    false
                 });
             })
             .ok();

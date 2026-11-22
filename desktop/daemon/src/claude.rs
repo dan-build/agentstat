@@ -30,12 +30,40 @@ pub enum Output {
         id: String,
         event: Event,
     },
+    /// Something the person should know about now (see [`Reason`]).
+    Attention {
+        id: String,
+        reason: Reason,
+        message: String,
+        /// The app the session runs in (its bundle id), to bring it forward.
+        app: Option<String>,
+        time: f64,
+    },
+}
+
+/// Why an agent needs attention.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Reason {
+    /// Waiting on the person: a permission prompt or a question.
+    NeedsYou,
+    /// A long turn finished.
+    Done,
+    /// A turn ended in an error.
+    Failed,
+    /// Critical stall (from the detectors).
+    Stalled,
+    /// Critical runaway (from the detectors).
+    Runaway,
 }
 
 /// Sessions tracked at once; records for more are ignored (a local process
 /// could otherwise grow the service without bound).
 pub const MAX_SESSIONS: usize = 200;
 const MAX_ID_LEN: usize = 128;
+/// A finished turn is worth a notification only if it took at least this long.
+pub const DONE_MIN_MS: f64 = 60_000.0;
+const MAX_APP_LEN: usize = 100;
 /// A complete assistant message is the end of the turn only if no more work
 /// follows this soon (the message that asks for a tool comes just before it runs).
 pub const FINISH_DELAY_MS: f64 = 1_500.0;
@@ -57,6 +85,10 @@ struct Session {
     last_t: f64,
     /// A finish waiting to see if more work follows: (its time, when received).
     finish: Option<(f64, f64)>,
+    /// When the current turn started (hooks), for "finished after …".
+    turn_since: Option<f64>,
+    /// The app the session runs in (bundle id from the plugin), if known.
+    app: Option<String>,
 }
 
 #[derive(Default)]
@@ -92,6 +124,16 @@ fn emit(key: &str, s: &mut Session, events: Vec<Event>, out: &mut Vec<Output>) {
         set_time(&mut event, t);
         s.last_t = t;
         out.push(Output::Event { id: id.clone(), event });
+    }
+}
+
+/// "45s", "4m 12s", "1h 03m".
+fn duration(ms: f64) -> String {
+    let s = (ms / 1000.0).round() as u64;
+    match s {
+        0..60 => format!("{s}s"),
+        60..3600 => format!("{}m {:02}s", s / 60, s % 60),
+        _ => format!("{}h {:02}m", s / 3600, s % 3600 / 60),
     }
 }
 
@@ -197,6 +239,12 @@ impl ClaudeMapper {
     /// Map one hook call (its JSON input) received at `now`. Hooks carry no
     /// time of their own; they run as things happen, so `now` is the time.
     pub fn map_hook(&mut self, v: &serde_json::Value, now: f64) -> Vec<Output> {
+        self.map_hook_in(v, None, now)
+    }
+
+    /// [`map_hook`](Self::map_hook), with the bundle id of the app the session
+    /// runs in (Terminal, iTerm, VS Code, …) when the plugin sent it.
+    pub fn map_hook_in(&mut self, v: &serde_json::Value, app: Option<&str>, now: f64) -> Vec<Output> {
         let mut out = Vec::new();
         let str_of = |k: &str| v.get(k).and_then(|x| x.as_str()).filter(|x| !x.is_empty() && x.len() <= MAX_ID_LEN);
         let Some(sid) = str_of("session_id") else { return out };
@@ -232,6 +280,15 @@ impl ClaudeMapper {
         let s = self.sessions.get_mut(&key).expect("inserted above");
         let t = Some(now);
         let mut events = Vec::new();
+        if let Some(a) = app.filter(|a| {
+            !a.is_empty()
+                && a.len() <= MAX_APP_LEN
+                && a.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        }) {
+            s.app = Some(a.to_string());
+        }
+        // Built from names and timings only: Claude Code's own message text isn't forwarded.
+        let mut attention: Option<(Reason, String)> = None;
         // A session telemetry was reporting until now: hooks take over cleanly.
         // It learns its project, what telemetry left open is closed, and a turn
         // end it was waiting to confirm is applied.
@@ -254,6 +311,7 @@ impl ClaudeMapper {
             ("UserPromptSubmit", false) | ("SubagentStart", true) => {
                 s.tools.clear();
                 s.idle = false;
+                s.turn_since = Some(now);
                 events.push(Event::Start { time: t });
             }
             ("PreToolUse", _) => {
@@ -294,12 +352,40 @@ impl ClaudeMapper {
             ("StopFailure", _) => {
                 s.tools.clear();
                 s.idle = true;
+                if sub.is_none() {
+                    attention = Some((Reason::Failed, "turn ended with an error".into()));
+                }
+                s.turn_since = None;
                 events.extend([Event::Error { time: t }, Event::Finish { time: t }]);
             }
             ("Stop" | "SessionEnd", false) | ("SubagentStop", true) => {
                 s.tools.clear();
                 s.idle = true;
+                if event == "Stop"
+                    && let Some(since) = s.turn_since
+                    && now - since >= DONE_MIN_MS
+                {
+                    attention = Some((Reason::Done, format!("finished after {}", duration(now - since))));
+                }
+                s.turn_since = None;
                 events.push(Event::Finish { time: t });
+            }
+            // Waiting on the person: a permission prompt (for the tool just
+            // requested) or a question.
+            ("Notification", false)
+                if matches!(
+                    v.get("notification_type").and_then(|x| x.as_str()),
+                    Some("permission_prompt" | "elicitation_dialog")
+                ) =>
+            {
+                let message = match (v.get("notification_type").and_then(|x| x.as_str()), s.tools.last()) {
+                    (Some("permission_prompt"), Some((_, tool))) if !tool.is_empty() => {
+                        format!("needs your permission for {}", tool.chars().take(64).collect::<String>())
+                    }
+                    (Some("permission_prompt"), _) => "needs your permission".into(),
+                    _ => "has a question for you".into(),
+                };
+                attention = Some((Reason::NeedsYou, message));
             }
             // Claude Code waiting for input for a while: a turn left open (an
             // interrupt mid-reply sends no other signal) has ended.
@@ -315,7 +401,15 @@ impl ClaudeMapper {
             _ => {}
         }
         emit(&key, s, events, &mut out);
+        if let Some((reason, message)) = attention {
+            out.push(Output::Attention { id: agent_id(&key), reason, message, app: s.app.clone(), time: now });
+        }
         out
+    }
+
+    /// The app a session runs in, by agent id (for detector notifications).
+    pub fn app_of(&self, agent_id: &str) -> Option<String> {
+        agent_id.strip_prefix("claude:").and_then(|k| self.sessions.get(k)).and_then(|s| s.app.clone())
     }
 
     /// Finishes whose turn saw no more work for `FINISH_DELAY_MS`.
@@ -434,6 +528,66 @@ mod tests {
         let mut v = json!({"session_id": "d76e4ebe-dde0", "cwd": "/Users/me/code/agentstat", "hook_event_name": event});
         v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
         v
+    }
+
+    fn attention(out: Vec<Output>) -> Vec<(Reason, String, Option<String>)> {
+        out.into_iter()
+            .filter_map(|o| match o {
+                Output::Attention { reason, message, app, .. } => Some((reason, message, app)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn attention_for_a_permission_prompt_a_long_turn_and_a_failure() {
+        let mut m = ClaudeMapper::default();
+        let app = Some("com.googlecode.iterm2");
+        m.map_hook_in(&hook("UserPromptSubmit", json!({"prompt": "secret"})), app, 1_000.0);
+        m.map_hook_in(&hook("PreToolUse", json!({"tool_name": "Bash", "tool_use_id": "t1"})), app, 2_000.0);
+        // Claude Code's own message text is never forwarded.
+        let prompt = json!({"notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash: rm -rf x"});
+        assert_eq!(
+            attention(m.map_hook_in(&hook("Notification", prompt), app, 2_500.0)),
+            vec![(Reason::NeedsYou, "needs your permission for Bash".into(), Some("com.googlecode.iterm2".into()))]
+        );
+        m.map_hook(&hook("PostToolUse", json!({"tool_name": "Bash", "tool_use_id": "t1"})), 9_000.0);
+        // A turn of 4m 12s: "done", with the app remembered from earlier hooks.
+        assert_eq!(
+            attention(m.map_hook(&hook("Stop", json!({})), 253_000.0)),
+            vec![(Reason::Done, "finished after 4m 12s".into(), Some("com.googlecode.iterm2".into()))]
+        );
+        // A short turn: nothing.
+        m.map_hook(&hook("UserPromptSubmit", json!({})), 300_000.0);
+        assert_eq!(attention(m.map_hook(&hook("Stop", json!({})), 320_000.0)), vec![]);
+        // A failed turn, however short.
+        m.map_hook(&hook("UserPromptSubmit", json!({})), 400_000.0);
+        assert_eq!(
+            attention(m.map_hook(&hook("StopFailure", json!({"error": "rate_limit"})), 401_000.0)),
+            vec![(Reason::Failed, "turn ended with an error".into(), Some("com.googlecode.iterm2".into()))]
+        );
+        // A question; the idle reminder is not a notification.
+        assert_eq!(
+            attention(m.map_hook(&hook("Notification", json!({"notification_type": "elicitation_dialog"})), 402_000.0)),
+            vec![(Reason::NeedsYou, "has a question for you".into(), Some("com.googlecode.iterm2".into()))]
+        );
+        assert_eq!(
+            attention(m.map_hook(&hook("Notification", json!({"notification_type": "idle_prompt"})), 403_000.0)),
+            vec![]
+        );
+        assert_eq!(m.app_of("claude:d76e4ebe-dde0").as_deref(), Some("com.googlecode.iterm2"));
+    }
+
+    #[test]
+    fn an_odd_app_id_is_ignored_and_subagents_do_not_notify_done() {
+        let mut m = ClaudeMapper::default();
+        m.map_hook_in(&hook("UserPromptSubmit", json!({})), Some("bad id; rm"), 0.0);
+        assert_eq!(m.app_of("claude:d76e4ebe-dde0"), None);
+        let sub = json!({"agent_id": "a1", "agent_type": "Explore"});
+        m.map_hook(&hook("SubagentStart", sub.clone()), 1_000.0);
+        assert_eq!(attention(m.map_hook(&hook("SubagentStop", sub), 200_000.0)), vec![]);
+        assert_eq!(duration(45_000.0), "45s");
+        assert_eq!(duration(3_780_000.0), "1h 03m");
     }
 
     #[test]
