@@ -1136,6 +1136,7 @@ fn main() {
                 |window, cx| cx.new(|cx| AgentStatApp::new(window, cx)),
             )
             .expect("open window");
+        menubar::guard_key_window();
         window
             .update(cx, |_, window, cx| {
                 // Closing the window hides AgentStat: it keeps notifying and stays

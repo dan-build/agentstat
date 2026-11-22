@@ -114,6 +114,43 @@ fn target_class() -> &'static Class {
     Class::get("AgentStatMenuTarget").expect("registered above")
 }
 
+static ORIGINAL_DID_BECOME_KEY: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+/// GPUI's `windowDidBecomeKey:`, but safe when the message is spurious.
+extern "C" fn did_become_key(this: &Object, sel: Sel, note: *mut Object) {
+    unsafe {
+        let key: objc::runtime::BOOL = msg_send![this, isKeyWindow];
+        if key == NO {
+            // Clicking the menu bar item makes its window key, and AppKit tells
+            // ours it became key though it didn't. GPUI balances that with
+            // `resignKeyWindow` while holding its window lock, and its resign
+            // handler then waits on that lock: the app hangs. Balance it here,
+            // without the lock.
+            let _: () = msg_send![this, resignKeyWindow];
+            return;
+        }
+        if let Some(&imp) = ORIGINAL_DID_BECOME_KEY.get() {
+            let f: extern "C" fn(&Object, Sel, *mut Object) = std::mem::transmute(imp);
+            f(this, sel, note);
+        }
+    }
+}
+
+/// Route GPUI windows' `windowDidBecomeKey:` through [`did_become_key`]. Call
+/// once, after the first window is open (GPUI registers its class then).
+pub fn guard_key_window() {
+    unsafe {
+        let Some(cls) = Class::get("GPUIWindow") else { return };
+        let m = objc::runtime::class_getInstanceMethod(cls, sel!(windowDidBecomeKey:)) as *mut objc::runtime::Method;
+        if m.is_null() || ORIGINAL_DID_BECOME_KEY.get().is_some() {
+            return;
+        }
+        let new: extern "C" fn(&Object, Sel, *mut Object) = did_become_key;
+        let old = objc::runtime::method_setImplementation(m, std::mem::transmute::<extern "C" fn(&Object, Sel, *mut Object), objc::runtime::Imp>(new));
+        let _ = ORIGINAL_DID_BECOME_KEY.set(old as usize);
+    }
+}
+
 /// The menu bar item. Lives as long as the app.
 pub struct MenuBar {
     item: *mut Object,
@@ -196,6 +233,26 @@ impl MenuBar {
             add("Quit AgentStat", sel!(quit:), true);
             let _: () = msg_send![self.item, setMenu: menu];
             let _: () = msg_send![menu, release];
+            if std::env::var_os("AGENTSTAT_DEBUG").is_some() && !button.is_null() {
+                // Frames as KVC-boxed NSValues: no struct returns through msg_send.
+                let describe = |o: *mut Object| -> String {
+                    if o.is_null() {
+                        return "nil".into();
+                    }
+                    let v: *mut Object = msg_send![o, valueForKey: ns_string("frame")];
+                    let d: *mut Object = if v.is_null() { v } else { msg_send![v, description] };
+                    rust_string(d).unwrap_or_else(|| "?".into())
+                };
+                let window: *mut Object = msg_send![button, window];
+                let image: *mut Object = msg_send![button, image];
+                eprintln!(
+                    "menubar: title {:?}, image nil {}, button {}, window {}",
+                    state.title(),
+                    image.is_null(),
+                    describe(button),
+                    describe(window)
+                );
+            }
         }
         self.shown = Some(state.clone());
     }
