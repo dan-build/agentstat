@@ -640,6 +640,10 @@ calls and anomalies. The service keeps a week of these days on your Mac, in
 `~/Library/Application Support/AgentStat/history/`. It keeps names and numbers
 only, never prompt or response text.
 
+`agentstat budget --cost 20` sets a daily budget (or `--tokens 2M`, or both).
+The app notifies you at 80% and again at 100%, once each a day. `agentstat budget`
+shows today against it; `agentstat budget off` removes it.
+
 ### Verify, don't trust
 
 AgentStat isn't notarized by Apple, on purpose: there's no company or

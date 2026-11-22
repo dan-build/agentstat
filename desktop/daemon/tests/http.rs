@@ -268,3 +268,39 @@ fn the_day_s_history_counts_tools_tokens_and_cost() {
     let (status, _) = request(port, "GET", "/v1/history?date=../../etc", "localhost", &[], "");
     assert_eq!(status, 404);
 }
+
+#[test]
+fn crossing_the_daily_budget_alerts_once() {
+    use agentstat_core::history::Budget;
+    let mut d = Daemon::new();
+    d.set_budget(Budget { daily_cost_usd: Some(1.0), daily_output_tokens: None });
+    let now = agentstat_daemon::now_ms();
+    let call = |cost: f64, t: f64| {
+        let attr = |k: &str, v: Value| serde_json::json!({"key": k, "value": v});
+        serde_json::json!({"resourceLogs": [{
+            "resource": {"attributes": [attr("service.name", serde_json::json!({"stringValue": "claude-code"}))]},
+            "scopeLogs": [{"logRecords": [{
+                "timeUnixNano": format!("{}", (t as u64) * 1_000_000),
+                "body": {"stringValue": "claude_code.api_request"},
+                "attributes": [
+                    attr("event.name", serde_json::json!({"stringValue": "api_request"})),
+                    attr("session.id", serde_json::json!({"stringValue": "s-b"})),
+                    attr("output_tokens", serde_json::json!({"intValue": 10})),
+                    attr("cost_usd", serde_json::json!({"doubleValue": cost})),
+                ]
+            }]}]
+        }]})
+    };
+    d.ingest_logs(&call(0.5, now), now);
+    d.tick(now);
+    assert!(d.history(None).unwrap().day.alerts.is_empty());
+    d.ingest_logs(&call(0.4, now + 1_000.0), now + 1_000.0);
+    d.tick(now + 1_000.0);
+    assert_eq!(d.history(None).unwrap().day.alerts, vec!["cost-80@1"]);
+    d.ingest_logs(&call(0.4, now + 2_000.0), now + 2_000.0);
+    d.tick(now + 2_000.0);
+    d.tick(now + 2_500.0);
+    let view = d.history(None).unwrap();
+    assert_eq!(view.day.alerts, vec!["cost-80@1", "cost-100@1"]);
+    assert_eq!(view.budget.daily_cost_usd, Some(1.0));
+}

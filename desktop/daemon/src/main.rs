@@ -4,6 +4,7 @@
 //!   agentstat watch              live table of every agent
 //!   agentstat status             the table once
 //!   agentstat today              what each project did today
+//!   agentstat budget --cost 20   a daily budget, with an alert at 80% and 100%
 //!   agentstat serve              run the service in the foreground
 //!   agentstat connect claude     set Claude Code up to report here (asks first)
 //!   agentstat service install    start the service at login
@@ -39,6 +40,10 @@ Usage:
                                  What each project did today (or that day):
                                  sessions, time working, tokens, cost,
                                  anomalies. Kept for 7 days.
+  agentstat budget [--cost USD] [--tokens N] | budget off
+                                 A daily budget for cost and/or output tokens
+                                 (e.g. --tokens 2M). The app notifies at 80%
+                                 and at 100%. Without options: today against it.
   agentstat serve [--port N]     Run the service in the foreground.
   agentstat service install|uninstall|status
                                  Start the service at login (launchd), or stop.
@@ -68,10 +73,11 @@ fn main() -> ExitCode {
     // first other argument (or after `--`), and everything from there is its own.
     // Setup commands take one word (`connect claude`, `service install`) and
     // --yes / --dry-run, anywhere after the command.
-    let takes_word = matches!(cmd.as_str(), "connect" | "disconnect" | "service");
+    let takes_word = matches!(cmd.as_str(), "connect" | "disconnect" | "service" | "budget");
     let mut word: Option<&str> = None;
     let mut confirm = setup::Confirm::default();
     let mut date: Option<String> = None;
+    let (mut cost, mut tokens): (Option<f64>, Option<f64>) = (None, None);
     let mut i = 0;
     while i < rest.len() {
         match rest[i].as_str() {
@@ -87,6 +93,17 @@ fn main() -> ExitCode {
                     Some(d) => Some(d.clone()),
                     None => return fail("--date needs a date like 2026-11-21"),
                 };
+                i += 2;
+            }
+            "--cost" | "--tokens" if cmd == "budget" => {
+                let Some(v) = rest.get(i + 1).and_then(|v| parse_amount(v)) else {
+                    return fail(&format!("{} needs an amount, like 20 or 2M", rest[i]));
+                };
+                if rest[i] == "--cost" {
+                    cost = Some(v);
+                } else {
+                    tokens = Some(v);
+                }
                 i += 2;
             }
             "--" if cmd == "run" => {
@@ -116,6 +133,7 @@ fn main() -> ExitCode {
         "watch" => watch(port),
         "status" => status(port),
         "today" => today(port, date.as_deref()),
+        "budget" => budget(port, word, cost, tokens),
         "mcp" => mcp(port),
         "connect" => setup::connect(word, port, confirm),
         "disconnect" => setup::disconnect(word, port, confirm),
@@ -385,6 +403,70 @@ fn today(port: u16, date: Option<&str>) -> ExitCode {
     }
     if rows.len() > 1 {
         line(&total, &format!("All ({})", day.date));
+    }
+    ExitCode::SUCCESS
+}
+
+/// "20", "$20", "2.5M", "500k": a positive amount.
+fn parse_amount(s: &str) -> Option<f64> {
+    let s = s.trim().trim_start_matches('$').replace(',', "");
+    let (num, mul) = match s.chars().last()? {
+        'k' | 'K' => (&s[..s.len() - 1], 1e3),
+        'm' | 'M' => (&s[..s.len() - 1], 1e6),
+        _ => (s.as_str(), 1.0),
+    };
+    num.parse::<f64>().ok().map(|v| v * mul).filter(|v| v.is_finite() && *v > 0.0)
+}
+
+fn budget(port: u16, word: Option<&str>, cost: Option<f64>, tokens: Option<f64>) -> ExitCode {
+    use agentstat_core::history::{Budget, format_tokens, summarize};
+    use agentstat_daemon::history::{budget_file, read_budget, write_budget};
+    let Some(path) = budget_file(port) else { return fail("HOME isn't set") };
+    let mut b = match read_budget(&path) {
+        Ok(b) => b,
+        // Don't overwrite what someone wrote by hand; `off` replaces it.
+        Err(_) if word == Some("off") => Budget::default(),
+        Err(e) => return fail(&format!("{}: {e} (fix it, or start over with `agentstat budget off`)", path.display())),
+    };
+    match word {
+        Some("off") if cost.is_some() || tokens.is_some() => {
+            return fail("`off` removes the whole budget; to change one limit, give just --cost or --tokens");
+        }
+        Some("off") => b = Budget::default(),
+        Some(other) => return fail(&format!("unexpected argument `{other}` (budget takes --cost, --tokens or off)")),
+        None => {
+            b.daily_cost_usd = cost.or(b.daily_cost_usd);
+            b.daily_output_tokens = tokens.or(b.daily_output_tokens);
+        }
+    }
+    if (word.is_some() || cost.is_some() || tokens.is_some())
+        && let Err(e) = write_budget(&path, &b)
+    {
+        return fail(&format!("couldn't save the budget: {e}"));
+    }
+    if !b.is_set() {
+        println!("No daily budget. Set one with: agentstat budget --cost 20 (or --tokens 2M)");
+        return ExitCode::SUCCESS;
+    }
+    let today = client::get(port, "/v1/history")
+        .ok()
+        .and_then(|body| serde_json::from_str::<agentstat_core::history::Day>(&body).ok())
+        .map(|d| summarize(&d).1);
+    let share = |used: f64, limit: f64| format!("{:.0}%", used / limit * 100.0);
+    println!("Daily budget (alerts at 80% and 100%):");
+    if let Some(l) = b.daily_cost_usd {
+        let now =
+            today.as_ref().map_or(String::new(), |t| format!("today ${:.2}, {}", t.cost_usd, share(t.cost_usd, l)));
+        println!("  cost           {:<9}{now}", format!("${l:.2}"));
+    }
+    if let Some(l) = b.daily_output_tokens {
+        let now = today.as_ref().map_or(String::new(), |t| {
+            format!("today {}, {}", format_tokens(t.output_tokens), share(t.output_tokens, l))
+        });
+        println!("  output tokens  {:<9}{now}", format_tokens(l));
+    }
+    if today.is_none() {
+        println!("(The service isn't running, so today's use isn't shown.)");
     }
     ExitCode::SUCCESS
 }

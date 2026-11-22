@@ -23,7 +23,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::claude::{ClaudeMapper, Output, Reason, is_claude};
-use crate::history::{self, Day, History};
+use crate::history::{self, Budget, Day, History};
 use crate::now_ms;
 use crate::otlp::log_records;
 use crate::stream::{Body as MsgBody, EventLog, Message};
@@ -47,6 +47,10 @@ const MAX_HOOK_BODY: usize = 16 * 1024 * 1024;
 const WORKING_QUIET_MS: f64 = 5.0 * 60_000.0;
 /// Longest gap between ticks counted as working time (a sleep isn't work).
 const MAX_TICK_GAP_MS: f64 = 2_000.0;
+/// The budget file is looked at this often.
+const BUDGET_CHECK_MS: f64 = 2_000.0;
+/// Budget alerts go out under this id (they're about the day, not an agent).
+pub const BUDGET_ID: &str = "agentstat:budget";
 /// Live streams served at once.
 const MAX_STREAMS: usize = 16;
 static STREAMS: AtomicUsize = AtomicUsize::new(0);
@@ -63,6 +67,11 @@ pub struct Daemon {
     history: History,
     /// The previous tick, for working time.
     ticked_at: f64,
+    /// The daily budget, from its file (re-read when it changes).
+    budget: Budget,
+    budget_file: Option<std::path::PathBuf>,
+    budget_seen: Option<std::time::SystemTime>,
+    budget_checked: f64,
     /// Anomaly episodes open now, so one counts once in history (the store
     /// reports an episode again when it escalates).
     open_episodes: std::collections::HashSet<(String, &'static str)>,
@@ -90,6 +99,12 @@ impl Daemon {
         Self::with_history(None)
     }
 
+    /// A service whose history is kept in `dir` and budget read from
+    /// `budget_file` (see [`history`]).
+    pub fn with_files(dir: Option<std::path::PathBuf>, budget_file: Option<std::path::PathBuf>) -> Self {
+        Daemon { budget_file, ..Self::with_history(dir) }
+    }
+
     /// A service whose history is kept in `dir` (see [`history`]).
     pub fn with_history(dir: Option<std::path::PathBuf>) -> Self {
         let now = now_ms();
@@ -97,6 +112,10 @@ impl Daemon {
         Daemon {
             history: History::open(dir, now),
             ticked_at: now,
+            budget: Budget::default(),
+            budget_file: None,
+            budget_seen: None,
+            budget_checked: f64::NEG_INFINITY,
             open_episodes: Default::default(),
             log: EventLog::default(),
             store: Store::new(Vec::new(), StoreOptions::default(), now_ms()),
@@ -258,6 +277,7 @@ impl Daemon {
                 r.working_ms += dt;
             }
         }
+        self.check_budget(now);
         self.history.maybe_save(now);
         let excess = self.recent.len().saturating_sub(RECENT_ANOMALIES);
         self.recent.drain(..excess);
@@ -269,13 +289,43 @@ impl Daemon {
         }
     }
 
+    /// Re-read the budget file if it changed, and send alerts that are due.
+    fn check_budget(&mut self, now: f64) {
+        if now - self.budget_checked >= BUDGET_CHECK_MS {
+            self.budget_checked = now;
+            if let Some(path) = &self.budget_file {
+                let seen = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+                if seen != self.budget_seen {
+                    self.budget_seen = seen;
+                    // A file that can't be read keeps the budget there was.
+                    match history::read_budget(path) {
+                        Ok(b) => self.budget = b,
+                        Err(e) => eprintln!("agentstat: ignoring {}: {e}", path.display()),
+                    }
+                }
+            }
+        }
+        if self.budget.is_set() {
+            for a in self.history.alerts_due(&self.budget, now) {
+                // One id per limit: two alerts in one tick are two notifications.
+                let id = format!("{BUDGET_ID}:{}", a.what);
+                self.log.attention(&id, Reason::Budget, a.message, None, now);
+            }
+        }
+    }
+
+    /// Set the budget directly (tests; the service reads its file).
+    pub fn set_budget(&mut self, b: Budget) {
+        self.budget = b;
+    }
+
     /// A day's history (today when `date` is None), and the dates there are.
     pub fn history(&self, date: Option<&str>) -> Option<HistoryView> {
         let day = match date {
             None => self.history.today().clone(),
             Some(d) => self.history.day(d)?,
         };
-        Some(HistoryView { dates: self.history.dates(), day })
+        Some(HistoryView { dates: self.history.dates(), budget: self.budget, day })
     }
 
     /// Write history that hasn't been saved yet (on shutdown).
@@ -336,6 +386,9 @@ pub struct AgentView {
 pub struct HistoryView {
     /// Dates with history, newest first.
     pub dates: Vec<String>,
+    /// The daily budget now (it applies to today).
+    #[serde(default)]
+    pub budget: Budget,
     #[serde(flatten)]
     pub day: Day,
 }
@@ -547,11 +600,7 @@ pub fn spawn_ticker(state: Shared) {
 
 /// Run the service until Ctrl-C (or SIGTERM).
 pub async fn serve(port: u16) -> std::io::Result<()> {
-    // A service on another port keeps its own history (a test run doesn't
-    // mix into the real one).
-    let dir = history::default_dir()
-        .map(|d| if port == crate::DEFAULT_PORT { d } else { d.with_file_name(format!("history-{port}")) });
-    let state: Shared = Arc::new(Mutex::new(Daemon::with_history(dir)));
+    let state: Shared = Arc::new(Mutex::new(Daemon::with_files(history::dir_for(port), history::budget_file(port))));
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     spawn_ticker(state.clone());
     let shutdown = async {

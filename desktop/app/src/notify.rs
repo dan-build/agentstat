@@ -35,7 +35,9 @@ unsafe fn rust_string(ns: *mut Object) -> Option<String> {
 extern "C" fn did_activate(_this: &Object, _sel: Sel, _center: *mut Object, note: *mut Object) {
     unsafe {
         let info: *mut Object = msg_send![note, userInfo];
+        // No session app (a budget alert): bring AgentStat back, even hidden.
         if info.is_null() {
+            crate::menubar::show_app();
             return;
         }
         let key = ns_string(APP_KEY.to_str().unwrap_or("app"));
