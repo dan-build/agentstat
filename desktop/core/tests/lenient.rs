@@ -31,3 +31,23 @@ fn absent_fields_stay_absent_when_serialized() {
     let e = Event::ToolEnd { name: Some("bash".into()), error: None, time: None };
     assert_eq!(serde_json::to_string(&e).unwrap(), r#"{"type":"tool-end","name":"bash"}"#);
 }
+
+#[test]
+fn cost_adds_up_and_changes_nothing_else() {
+    use agentstat_core::store::{Store, StoreOptions};
+    let e: Event = serde_json::from_str(r#"{"type":"cost","usd":0.25}"#).unwrap();
+    assert_eq!(e, Event::Cost { usd: Some(0.25), time: None });
+    let mut store = Store::new(vec![], StoreOptions { window_seconds: None, max_history_points: 1_000 }, 0.0);
+    store.ensure("a", 0.0, 0.0);
+    store.push("a", &Event::Start { time: Some(10.0) }, 10.0);
+    store.push("a", &Event::Finish { time: Some(20.0) }, 20.0);
+    let before = store.stats("a", 30.0).unwrap();
+    store.push("a", &e, 30.0);
+    store.push("a", &Event::Cost { usd: Some(f64::NAN), time: None }, 31.0);
+    store.push("a", &Event::Cost { usd: Some(0.5), time: None }, 32.0);
+    let after = store.stats("a", 30.0).unwrap();
+    assert_eq!(after.cost_usd, 0.75);
+    // Still complete, and complete since the same time.
+    assert_eq!(after.status_ms, before.status_ms);
+    assert_eq!(store.agent("a").unwrap().current.status, Status::Complete);
+}

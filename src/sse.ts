@@ -124,6 +124,7 @@ export function createSseHandler(
         send('retry: 2000\n\n');
         unsubscribe = src.subscribe((m) => {
           const wire: Wire = { m, sent: Date.now() };
+          if (m.type === 'attention' && typeof m.time === 'number') wire.age = Math.max(0, clock() - m.time);
           if (m.type === 'event' && typeof m.event.time === 'number') {
             wire.age = Math.max(0, clock() - m.event.time);
             if (m.event.type === 'tokens' && typeof m.event.since === 'number') {
@@ -162,6 +163,7 @@ const valid = (m: unknown): m is AgentStreamMessage => {
   const x = m as AgentStreamMessage | null;
   if (!x || typeof x.seq !== 'number' || typeof x.id !== 'string') return false;
   if (x.type === 'event') return !!x.event && typeof x.event.type === 'string';
+  if (x.type === 'attention') return typeof x.reason === 'string' && typeof x.message === 'string';
   return x.type === 'agent' || x.type === 'remove';
 };
 
@@ -243,6 +245,14 @@ export function connectSse(url: string, options: SseSourceOptions = {}): AgentSo
     } else if (m.type === 'agent') {
       const { name, color, config } = m;
       local.describe(m.id, { name, color, config });
+    } else if (m.type === 'attention') {
+      // Mapped to this page's clock like an event's time; a replay from
+      // another instance is old news.
+      const transit = Date.now() - wire.sent;
+      const time = clock() - (wire.age ?? 0) - Math.max(0, transit - (Number.isFinite(fastest) ? fastest : transit));
+      if (time <= skipBefore + 100) return;
+      const { reason, message, app } = m;
+      local.attention(m.id, { reason, message, app, time });
     } else if (!catchingUp) local.remove(m.id);
   };
   const connect = () => {

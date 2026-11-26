@@ -2,20 +2,45 @@
   "name": "agentstat",
   "displayName": "AgentStat",
   "description": "Your agents, live: every Claude Code session and anything else reporting to AgentStat, in the status bar and a panel.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "dan-build",
   "license": "MIT",
   "homepage": "https://agentstat.sdaniel.cc",
-  "repository": { "type": "git", "url": "https://github.com/dan-build/agentstat", "directory": "extensions/vscode" },
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Visualization", "Other"],
-  "keywords": ["agents", "claude", "monitoring", "telemetry", "ai"],
-  "activationEvents": ["onStartupFinished"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dan-build/agentstat",
+    "directory": "extensions/vscode"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "agents",
+    "claude",
+    "monitoring",
+    "telemetry",
+    "ai"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
-      { "command": "agentstat.show", "title": "Show Agents", "category": "AgentStat" },
-      { "command": "agentstat.startService", "title": "Start Service", "category": "AgentStat" }
+      {
+        "command": "agentstat.show",
+        "title": "Show Agents",
+        "category": "AgentStat"
+      },
+      {
+        "command": "agentstat.startService",
+        "title": "Start Service",
+        "category": "AgentStat"
+      }
     ],
     "configuration": {
       "title": "AgentStat",

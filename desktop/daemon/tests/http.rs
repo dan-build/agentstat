@@ -369,3 +369,67 @@ fn codex_hooks_drive_an_agent_named_after_its_project() {
     let (status, _) = request(port, "POST", "/v1/hooks/codex", &host, &[("Content-Type", "text/plain")], "{}");
     assert_ne!(status, 204);
 }
+
+#[test]
+fn the_stream_carries_cost_and_attention_with_their_age() {
+    let port = start();
+    let host = format!("127.0.0.1:{port}");
+    let post = |path: &str, body: serde_json::Value| {
+        let (status, _) =
+            request(port, "POST", path, &host, &[("Content-Type", "application/json")], &body.to_string());
+        assert!(status == 200 || status == 204, "{path}: {status}");
+    };
+    let base = |event: &str| {
+        serde_json::json!({"session_id": "019a-c", "cwd": "/Users/me/code/shop", "hook_event_name": event,
+            "model": "m", "permission_mode": "default", "turn_id": "t1"})
+    };
+    post("/v1/hooks/codex", base("UserPromptSubmit"));
+    let mut ask = base("PermissionRequest");
+    ask["tool_name"] = "shell".into();
+    post("/v1/hooks/codex", ask);
+    let body = CODEX_TURN.replace("019a6f3c-7e2b-7c41-9d0e-5b8f1a2c3d4e", "019a-c");
+    let (status, _) = request(port, "POST", "/v1/logs", &host, &[("Content-Type", "application/json")], &body);
+    assert_eq!(status, 200);
+    let frames = read_frames(port, None, 6);
+    let attention = frames.iter().map(|(_, v)| v).find(|v| v["m"]["type"] == "attention").expect("attention frame");
+    assert_eq!(attention["m"]["reason"], "needs-you");
+    assert!(attention["age"].as_f64().is_some_and(|a| a >= 0.0));
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let mut seen = frames;
+    while !seen.iter().any(|(_, v)| v["m"]["event"]["type"] == "cost") {
+        assert!(std::time::Instant::now() < deadline, "no cost frame");
+        seen = read_frames(port, None, seen.len() + 1);
+    }
+    let cost = seen.iter().map(|(_, v)| v).find(|v| v["m"]["event"]["type"] == "cost").unwrap();
+    assert_eq!(cost["m"]["event"]["usd"], 0.0123);
+    // The day's history still counts it once.
+    let (_, resp) = request(port, "GET", "/v1/history", "localhost", &[], "");
+    let v: Value = serde_json::from_str(body_of(&resp)).unwrap();
+    assert_eq!(v["agents"]["codex:019a-c"]["costUsd"], 0.0123);
+}
+
+#[test]
+fn the_agent_list_says_who_needs_you_until_they_move_on() {
+    let port = start();
+    let host = format!("127.0.0.1:{port}");
+    let post = |body: serde_json::Value| {
+        let (status, _) =
+            request(port, "POST", "/v1/hooks/codex", &host, &[("Content-Type", "application/json")], &body.to_string());
+        assert_eq!(status, 204);
+    };
+    let base = |event: &str| {
+        serde_json::json!({"session_id": "019a-n", "cwd": "/Users/me/code/shop", "hook_event_name": event,
+            "model": "m", "permission_mode": "default", "turn_id": "t1", "tool_name": "shell", "tool_use_id": "c1"})
+    };
+    let first = || {
+        let (_, resp) = request(port, "GET", "/v1/agents", "localhost", &[], "");
+        serde_json::from_str::<Snapshot>(body(&resp)).unwrap().agents.remove(0)
+    };
+    post(base("UserPromptSubmit"));
+    post(base("PreToolUse"));
+    post(base("PermissionRequest"));
+    assert_eq!(first().needs_you.as_deref(), Some("needs your permission for shell"));
+    std::thread::sleep(Duration::from_millis(5));
+    post(base("PostToolUse"));
+    assert_eq!(first().needs_you, None);
+}

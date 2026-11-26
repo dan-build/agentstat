@@ -7,10 +7,12 @@ import { AgentStatusBadge } from '@/components/agent-status-badge';
 const rate = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 const whole = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });
+const usd = (v: number) =>
+  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: v < 0.01 ? 4 : v < 1_000 ? 2 : 0 }).format(v);
 
 const PER_CALL = 'Reports each call when it ends: see its tokens';
 
-/** Every agent in a table: status, rate, tokens and health. */
+/** Every agent in a table: status, rate, tokens, health and (when reported) cost. */
 export function AgentRoster({
   agents,
   caption = 'Agents',
@@ -21,6 +23,8 @@ export function AgentRoster({
   caption?: string;
   className?: string;
 }) {
+  // A cost column only when some agent reports cost.
+  const cost = agents.some((a) => a.costUsd > 0);
   return (
     <Table className={className}>
       <TableCaption className="sr-only">{caption}</TableCaption>
@@ -32,6 +36,7 @@ export function AgentRoster({
           <TableHead className="hidden text-right sm:table-cell">Rate</TableHead>
           <TableHead className="text-right">Tokens</TableHead>
           <TableHead className="hidden text-right sm:table-cell">Health</TableHead>
+          {cost && <TableHead className="text-right">Cost</TableHead>}
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -53,6 +58,9 @@ export function AgentRoster({
             <TableCell className="hidden text-right tabular-nums sm:table-cell" title={agent.perCall ? PER_CALL : undefined}>
               {agent.health === null || agent.perCall ? '–' : agent.health}
             </TableCell>
+            {cost && (
+              <TableCell className="text-right tabular-nums">{agent.costUsd > 0 ? usd(agent.costUsd) : '–'}</TableCell>
+            )}
           </TableRow>
         ))}
       </TableBody>

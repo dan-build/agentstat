@@ -1,6 +1,7 @@
 import type * as React from 'react';
 export type LucideIcon = (props: React.SVGProps<SVGSVGElement>) => React.JSX.Element;
 export declare const Activity: LucideIcon;
+export declare const BellRing: LucideIcon;
 export declare const Brain: LucideIcon;
 export declare const CircleCheck: LucideIcon;
 export declare const CirclePause: LucideIcon;

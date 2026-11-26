@@ -1085,7 +1085,8 @@ impl AgentStatApp {
         let y_label = |v: f64| div().text_size(px(11.)).text_color(theme.text_tertiary).child(fmt_axis(v));
         let tokens = fmt_count(stats.as_ref().map_or(0.0, |s| s.total_tokens));
         let errors = fmt_count(a.current.error_count.unwrap_or(0.0));
-        let stats_row = match self.calls.get(&a.id) {
+        let cost_usd = stats.as_ref().map_or(0.0, |s| s.cost_usd);
+        let mut stats_row = match self.calls.get(&a.id) {
             // Calls reported when they end: what the last one did, and how many.
             Some(c) => {
                 let last = c.last.as_ref();
@@ -1108,6 +1109,10 @@ impl AgentStatApp {
                 ("Errors", errors),
             ],
         };
+        // What the agent reports it cost, since AgentStat first saw it.
+        if cost_usd > 0.0 {
+            stats_row.insert(stats_row.len() - 1, ("Cost", fmt_cost(cost_usd)));
+        }
         let paused = self.frozen.is_some();
 
         div()

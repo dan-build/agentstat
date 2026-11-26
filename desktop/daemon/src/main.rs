@@ -276,7 +276,7 @@ fn fit(s: &str, w: usize) -> String {
 fn table(snap: &Snapshot) -> String {
     let mut out = String::new();
     if snap.agents.is_empty() {
-        out.push_str("No agents yet. Start one with: agentstat run -- claude\n");
+        out.push_str("No agents yet. Connect one with: agentstat connect claude (or codex)\n");
         return out;
     }
     out.push_str(&format!(
@@ -284,7 +284,9 @@ fn table(snap: &Snapshot) -> String {
         "AGENT", "STATUS", "TOK/S", "TOKENS", "HEALTH", "TOOL", "ANOMALY"
     ));
     for a in &snap.agents {
-        let status = format!("{} {}", a.status, duration(a.status_ms));
+        // Waiting on you says so first: only you can unblock it.
+        let word = if a.needs_you.is_some() { "needs you" } else { a.status.as_str() };
+        let status = format!("{word} {}", duration(a.status_ms));
         let health = a.health.map_or("–".into(), |h| format!("{h:.0}"));
         out.push_str(&format!(
             "{} {} {:>8.1} {:>9.0} {:>7}  {} {}\n",
@@ -294,7 +296,7 @@ fn table(snap: &Snapshot) -> String {
             a.total_tokens,
             health,
             fit(a.tool.as_deref().unwrap_or("–"), 14),
-            a.anomalies.first().map_or("", String::as_str),
+            a.needs_you.as_deref().or(a.anomalies.first().map(String::as_str)).unwrap_or(""),
         ));
     }
     let recent: Vec<_> = snap.recent.iter().rev().take(3).collect();

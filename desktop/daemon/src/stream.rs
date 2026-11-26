@@ -188,7 +188,8 @@ fn set_time(e: &mut Event, t: f64) {
         | Event::ToolStart { time, .. }
         | Event::ToolEnd { time, .. }
         | Event::Error { time }
-        | Event::Finish { time } => *time = Some(t),
+        | Event::Finish { time }
+        | Event::Cost { time, .. } => *time = Some(t),
     }
 }
 

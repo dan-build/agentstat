@@ -93,6 +93,8 @@ const agent = (over: Partial<AgentTelemetry> = {}): AgentTelemetry => ({
   health: 91,
   perCall: false,
   anomalies: [],
+  costUsd: 0,
+  needsYou: null,
   history: [
     { status: 'active', fromMs: 60_000, toMs: 12_400 },
     { status: 'waiting', fromMs: 12_400, toMs: 0 },

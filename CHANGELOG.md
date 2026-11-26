@@ -2,6 +2,38 @@
 
 All notable changes to AgentStat are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [SemVer](https://semver.org/).
 
+## [0.8.0] — 2026-11-26
+
+### Added
+
+- **Attention: an agent that needs you.** A source can now say an agent
+  needs attention: `stream.attention(id, { reason, message })`, with
+  `reason` one of `needs-you`, `done`, `failed`, `stalled`, `runaway` or
+  `budget`. `useAgentTelemetry` returns `needsYou` (why, and for how long)
+  for an agent waiting on the person, until it does anything after asking.
+  `AgentStatusBadge` and `AgentRoster` show "Needs you" first, and the new
+  `onAttention` callback (on the hook and on `<AgentStat>`) fires for fresh
+  notices, not for history replayed on connect. The chart announces "needs
+  you" to screen readers. `connectSse` carries attention from
+  `createSseHandler`, and from the AgentStat service on your Mac.
+- **Cost.** A `{ type: 'cost', usd }` event adds to an agent's total, without
+  changing its status or when it was last heard from. `getStats()` and
+  `useAgentTelemetry` return `costUsd`, and `AgentRoster` shows a Cost column
+  when any agent reports cost. `formatCost` formats dollars.
+- The shadcn/ui `agent-status-badge` and `agent-roster` show "Needs you" and
+  cost the same way.
+
+Versions before 0.8.0 don't know `cost` events: connected to a source that
+sends them (the AgentStat service from the Mac app's next release), they count
+one as activity from the agent. Update the library together with the app.
+
+### Fixed
+
+- **An attention message no longer removes the agent.** A source that sent
+  one (the AgentStat service has since 0.2.0 of the Mac app) made a chart or
+  `useAgentTelemetry` drop that agent, because any message that wasn't an
+  event or a description was taken as a removal.
+
 ## [0.7.2] — 2026-11-20
 
 ### Fixed
