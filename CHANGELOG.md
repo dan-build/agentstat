@@ -19,9 +19,9 @@ All notable changes to AgentStat are documented here. Format follows [Keep a Cha
 - **Cost.** A `{ type: 'cost', usd }` event adds to an agent's total, without
   changing its status or when it was last heard from. `getStats()` and
   `useAgentTelemetry` return `costUsd`, and `AgentRoster` shows a Cost column
-  when any agent reports cost. `formatCost` formats dollars.
+  when any agent reports cost.
 - The shadcn/ui `agent-status-badge` and `agent-roster` show "Needs you" and
-  cost the same way.
+  cost the same way, and now require `@dan-build/agentstat@^0.8.0`.
 
 Versions before 0.8.0 don't know `cost` events: connected to a source that
 sends them (the AgentStat service from the Mac app's next release), they count
