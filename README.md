@@ -17,7 +17,7 @@ away, or when its status keeps flipping. It comes in two forms:
   one canvas, about 22 KB min+gzip, no dependencies besides React.
   [Quick start ↓](#quick-start)
 - **A macOS app and command line** for the coding agents on your machine:
-  every Claude Code and Codex session and subagent, live, local only.
+  every Claude Code, Codex and Cursor session, live, local only.
   [Get the app ↓](#the-macos-app)
 
 <picture>
@@ -605,8 +605,9 @@ Evergreen browsers from 2022 on: Chrome/Edge 94+, Firefox 93+, Safari 15.4+.
 ## The macOS app
 
 A native app and an `agentstat` command for watching the agents on your own
-machine: Claude Code and Codex sessions and their subagents, and anything that
-speaks OpenTelemetry through `agentstat run`. macOS 12 or later, Apple Silicon and Intel.
+machine: Claude Code, Codex and Cursor sessions (and their subagents, where the
+agent reports them), and anything that speaks OpenTelemetry through
+`agentstat run`. macOS 12 or later, Apple Silicon and Intel.
 
 ```bash
 curl -fsSL https://github.com/dan-build/agentstat/releases/download/app-v0.4.0/install.sh | sh -s -- --app
@@ -637,7 +638,15 @@ For Codex, `agentstat connect codex` does the same in Codex's own config
    hooks you already have. Codex runs new hooks only once you trust them: in
    Codex, type `/hooks` and press `t` (trust all).
 
-In the app, Codex sessions carry a small "Codex" tag next to their project.
+For Cursor, `agentstat connect cursor` adds hooks to `~/.cursor/hooks.json`,
+after any you already have. They only observe: AgentStat uses none of the
+hooks Cursor runs before an action, where a reply decides whether it may run,
+so it can never block or approve anything. Cursor reports a tool when it
+finishes, and no tokens or cost to local hooks, so a Cursor session shows its
+turns and tools, reads as waiting while it works, and counts as stalled only
+after minutes of silence. Its CLI reports tools but no turns.
+
+In the app, Codex and Cursor sessions carry a small tag next to their project.
 
 `agentstat doctor` checks the whole chain. `agentstat disconnect claude` (or
 `codex`) and `agentstat service uninstall` undo it. `agentstat watch` is a live table in the
