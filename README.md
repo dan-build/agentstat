@@ -610,7 +610,7 @@ subagents, where the agent reports them), and anything that speaks
 OpenTelemetry through `agentstat run`. macOS 12 or later, Apple Silicon and Intel.
 
 ```bash
-curl -fsSL https://github.com/dan-build/agentstat/releases/download/app-v0.4.0/install.sh | sh -s -- --app
+curl -fsSL https://github.com/dan-build/agentstat/releases/download/app-v0.5.0/install.sh | sh -s -- --app
 agentstat connect claude
 ```
 
@@ -697,7 +697,7 @@ commit in this repository and signs a record of where every file came from.
 Check a download against it, and against the release's checksums:
 
 ```bash
-gh attestation verify AgentStat-0.4.0-macos-universal.dmg --repo dan-build/agentstat
+gh attestation verify AgentStat-0.5.0-macos-universal.dmg --repo dan-build/agentstat
 grep macos-universal.dmg SHA256SUMS | shasum -a 256 -c
 ```
 
