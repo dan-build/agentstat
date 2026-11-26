@@ -304,3 +304,68 @@ fn crossing_the_daily_budget_alerts_once() {
     assert_eq!(view.day.alerts, vec!["cost-80@1", "cost-100@1"]);
     assert_eq!(view.budget.daily_cost_usd, Some(1.0));
 }
+
+/// A Codex turn as its OTLP/HTTP JSON export (built from Codex's own event
+/// definitions, openai/codex rust-v0.172.0: names in `event.name`, the session
+/// in `conversation.id`, tokens on `response.completed`, cost per turn).
+const CODEX_TURN: &str = include_str!("fixtures/codex-turn.json");
+
+#[test]
+fn a_codex_turn_becomes_an_agent_with_tokens_and_cost() {
+    let port = start();
+    let host = format!("127.0.0.1:{port}");
+    let (status, _) = request(port, "POST", "/v1/logs", &host, &[("Content-Type", "application/json")], CODEX_TURN);
+    assert_eq!(status, 200);
+    let (_, resp) = request(port, "GET", "/v1/agents", "localhost", &[], "");
+    let snap = serde_json::from_str::<Snapshot>(body(&resp)).unwrap();
+    assert_eq!(snap.agents.len(), 1);
+    let a = &snap.agents[0];
+    assert_eq!(a.id, "codex:019a6f3c-7e2b-7c41-9d0e-5b8f1a2c3d4e");
+    assert_eq!(a.name, "Codex 019a6f3c");
+    // The turn's cost record ended it.
+    assert_eq!((a.status.as_str(), a.tool.as_deref()), ("complete", None));
+    assert_eq!(a.total_tokens, 180.0 + 240.0);
+    let (_, resp) = request(port, "GET", "/v1/history", "localhost", &[], "");
+    let v: Value = serde_json::from_str(body(&resp)).unwrap();
+    let r = &v["agents"]["codex:019a6f3c-7e2b-7c41-9d0e-5b8f1a2c3d4e"];
+    assert_eq!(r["tools"], 1);
+    assert_eq!(r["costUsd"], 0.0123);
+    // Codex sends account fields with every record; none of it is kept.
+    let (_, agents) = request(port, "GET", "/v1/agents", "localhost", &[], "");
+    for text in [body(&resp), body(&agents)] {
+        assert!(!text.contains("example.com") && !text.contains("acct-"));
+    }
+}
+
+#[test]
+fn codex_hooks_drive_an_agent_named_after_its_project() {
+    let port = start();
+    let host = format!("127.0.0.1:{port}");
+    let post = |body: serde_json::Value| {
+        let (status, _) =
+            request(port, "POST", "/v1/hooks/codex", &host, &[("Content-Type", "application/json")], &body.to_string());
+        assert_eq!(status, 204);
+    };
+    let base = |event: &str| {
+        serde_json::json!({"session_id": "019a-x", "cwd": "/Users/me/code/shop", "hook_event_name": event,
+            "model": "gpt-5.5-codex", "permission_mode": "default", "turn_id": "t1"})
+    };
+    let mut pre = base("PreToolUse");
+    pre["tool_name"] = "shell".into();
+    pre["tool_use_id"] = "call_1".into();
+    post(base("SessionStart"));
+    post(base("UserPromptSubmit"));
+    post(pre);
+    let list = || {
+        let (_, resp) = request(port, "GET", "/v1/agents", "localhost", &[], "");
+        serde_json::from_str::<Snapshot>(body(&resp)).unwrap()
+    };
+    let a = &list().agents[0];
+    assert_eq!(a.id, "codex:019a-x");
+    assert_eq!((a.name.as_str(), a.status.as_str(), a.tool.as_deref()), ("shop", "waiting", Some("shell")));
+    post(base("Stop"));
+    assert_eq!(list().agents[0].status, "complete");
+    // Like the Claude Code route, it refuses what a web page could send.
+    let (status, _) = request(port, "POST", "/v1/hooks/codex", &host, &[("Content-Type", "text/plain")], "{}");
+    assert_ne!(status, 204);
+}

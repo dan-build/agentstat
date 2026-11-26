@@ -566,6 +566,16 @@ fn swatch(color: Hsla) -> impl IntoElement {
     div().size(px(8.)).flex_shrink_0().rounded(px(2.)).bg(color)
 }
 
+/// Which agent a session is, when it isn't Claude Code (the default):
+/// sessions of two agents in one project otherwise read the same.
+fn source_tag(id: &str) -> Option<&'static str> {
+    id.starts_with("codex:").then_some("Codex")
+}
+
+fn tag_label(tag: &'static str, theme: &Theme) -> impl IntoElement {
+    div().flex_shrink_0().text_size(px(11.)).text_color(theme.text_tertiary).child(tag)
+}
+
 fn dot(color: impl Into<Hsla>) -> impl IntoElement {
     div().size(px(6.)).flex_shrink_0().rounded_full().bg(color.into())
 }
@@ -705,6 +715,7 @@ impl AgentStatApp {
                                 .child(
                                     div().min_w_0().truncate().font(ui_font(FontWeight::MEDIUM)).child(a.name.clone()),
                                 )
+                                .when_some(source_tag(&a.id), |d, tag| d.child(tag_label(tag, theme)))
                                 .when(!anomalies.is_empty(), |d| {
                                     let c = if critical { theme.critical } else { theme.warning };
                                     d.child(div().text_color(c).text_size(px(11.)).child(if critical {
@@ -1010,7 +1021,7 @@ impl AgentStatApp {
                     "The agentstat command isn't installed",
                     "Install it with the script on agentstat.sdaniel.cc/docs/macos-app",
                 ),
-                _ => ("No agents yet", "Connect Claude Code in a terminal: agentstat connect claude"),
+                _ => ("No agents yet", "Connect an agent in a terminal: agentstat connect claude (or codex)"),
             };
             return div()
                 .flex_1()
@@ -1123,6 +1134,7 @@ impl AgentStatApp {
                             .gap_2()
                             .child(swatch(color))
                             .child(div().min_w_0().truncate().font(ui_font(FontWeight::SEMIBOLD)).child(a.name.clone()))
+                            .when_some(source_tag(&a.id), |d, tag| d.child(tag_label(tag, theme)))
                             .child(
                                 div()
                                     .flex_shrink_0()

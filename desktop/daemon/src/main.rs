@@ -7,6 +7,7 @@
 //!   agentstat budget --cost 20   a daily budget, with an alert at 80% and 100%
 //!   agentstat serve              run the service in the foreground
 //!   agentstat connect claude     set Claude Code up to report here (asks first)
+//!   agentstat connect codex      the same for Codex
 //!   agentstat service install    start the service at login
 //!   agentstat doctor             check that everything is in place
 
@@ -26,6 +27,9 @@ Get started:
                                  service at login, installs the AgentStat plugin,
                                  points its telemetry here. Shows every change
                                  and asks first (--yes to skip, --dry-run to look).
+  agentstat connect codex        The same for Codex: points its telemetry here
+                                 and adds hooks for live turns and tools (trust
+                                 them once in Codex: /hooks, then t).
   agentstat doctor               Check that everything is in place.
 
 Usage:
@@ -47,7 +51,8 @@ Usage:
   agentstat serve [--port N]     Run the service in the foreground.
   agentstat service install|uninstall|status
                                  Start the service at login (launchd), or stop.
-  agentstat disconnect claude    Undo `connect claude` (asks first).
+  agentstat disconnect claude|codex
+                                 Undo `connect` (asks first).
 
 The service listens on 127.0.0.1 only (default port 4318, or $AGENTSTAT_PORT).
 ";
@@ -210,6 +215,12 @@ fn run(port: u16, args: &[String]) -> ExitCode {
     };
     if let Err(e) = ensure_service(port) {
         return fail(&e);
+    }
+    // Codex reads its telemetry settings from its config file only.
+    if std::path::Path::new(program).file_name().is_some_and(|n| n == "codex") {
+        eprintln!(
+            "agentstat: Codex ignores the environment this sets; its telemetry and hooks are set up once with `agentstat connect codex`"
+        );
     }
     let endpoint = format!("http://127.0.0.1:{port}");
     let mut cmd = Command::new(program);
