@@ -320,10 +320,57 @@ Runs map to start/finish (`RUN_ERROR` counts an error), message, reasoning
 and tool-argument deltas to output, and a tool call is `waiting` from
 `TOOL_CALL_END` to `TOOL_CALL_RESULT` (or the end of the run, for tools your
 frontend runs). A stopped run (`RUN_ERROR` with code `abort`) isn't counted
-as an error. Subagent events are left to their own agents; give a child
-agent's own stream its own tap.
+as an error. A run that finishes interrupted for input (`outcome:
+{ type: 'interrupt' }`) needs you until the next run. Subagent events are
+left to their own agents; give a child agent's own stream its own tap.
 Pass events as the AG-UI client delivers them: it expands `*_CHUNK` events,
 and raw chunk streams lose tool calls.
+
+### Claude Agent SDK
+
+`@dan-build/agentstat/claude-agent-sdk` reads the messages of Anthropic's
+Claude Agent SDK `query()` (no dependency on it). Iterate through
+`trackClaudeAgent` instead of the query; the messages pass through unchanged:
+
+```ts
+import { query } from '@anthropic-ai/claude-agent-sdk';
+import { trackClaudeAgent } from '@dan-build/agentstat/claude-agent-sdk';
+
+for await (const m of trackClaudeAgent(stream, query({ prompt, options }), { agentId: 'fixer' })) {
+  // your own handling, as before
+}
+```
+
+Each run starts at the `init` message and finishes at its `result` (an error
+first if `is_error`), with the result's `total_cost_usd` as the agent's cost.
+A tool is `waiting` from its `tool_use` block to its `tool_result`. Each
+subagent the `Agent` tool starts is its own agent (`fixer/<tool_use_id>`,
+named after its type), with its own tool calls. Output is counted from
+partial messages when you pass `includePartialMessages: true`, which also
+shows each model request as it starts; otherwise from each completed block.
+`createClaudeAgentTap` gives you the per-message function instead.
+
+### OpenAI Agents SDK
+
+`@dan-build/agentstat/openai-agents` reads a streamed run of the OpenAI
+Agents SDK for JavaScript (no dependency on `@openai/agents`):
+
+```ts
+import { run } from '@openai/agents';
+import { trackOpenAiAgentsRun } from '@dan-build/agentstat/openai-agents';
+
+const result = await run(agent, input, { stream: true });
+for await (const e of trackOpenAiAgentsRun(stream, result, { agentId: 'support' })) {
+  // your own handling, as before
+}
+```
+
+Each model response is a request and its text deltas are output; tool calls
+are `waiting` from `tool_called` to `tool_output`, and a tool awaiting
+approval needs you. A handoff finishes the agent handing off; each agent
+after the first is its own (`support/<name>`). The run's end finishes the
+agent that was running, and a run that throws counts an error. The SDK
+reports no cost.
 
 More integrations — LangChain, WebSocket/SSE, MCP — are in the
 [integration guide](https://agentstat.sdaniel.cc/docs/real-data-integration/).

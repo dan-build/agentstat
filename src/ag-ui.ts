@@ -18,6 +18,8 @@ export type AgUiEvent = {
   subagentRunId?: string;
   /** On RUN_ERROR; `'abort'` when the run was stopped. */
   code?: string;
+  /** On RUN_FINISHED (AG-UI 1.0): `interrupt` when the run stopped for input. */
+  outcome?: { type?: string };
 };
 
 const estimate = (text: string) => text.length / 4;
@@ -78,6 +80,8 @@ export function createAgUiTap(sink: EventSink, agentId: string, options: Adapter
         break;
       case 'RUN_FINISHED':
         push({ type: 'finish' });
+        // Stopped to ask the person: it needs you until the next run.
+        if (e.outcome?.type === 'interrupt') sink.attention?.(agentId, { reason: 'needs-you', message: 'is waiting for your input' });
         break;
     }
   };

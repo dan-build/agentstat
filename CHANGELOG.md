@@ -2,6 +2,30 @@
 
 All notable changes to AgentStat are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows [SemVer](https://semver.org/).
 
+## [0.9.0] — Unreleased
+
+### Added
+
+- **Claude Agent SDK adapter** (`@dan-build/agentstat/claude-agent-sdk`):
+  `trackClaudeAgent(stream, query(…))` passes the messages of a `query()`
+  through and reports the run: requests and output (streamed with
+  `includePartialMessages`), tool calls, each subagent as its own agent, and
+  the result's cost.
+- **OpenAI Agents SDK adapter** (`@dan-build/agentstat/openai-agents`):
+  `trackOpenAiAgentsRun(stream, result)` reports a streamed run: model
+  responses and their output, tool calls, handoffs (each agent its own), and
+  tools awaiting approval.
+- **Adapters say when an agent needs you.** A sink with `attention` (an
+  `AgentStream` has it) hears it: the AI SDK adapter on `tool-approval-request`
+  and on a `useChat` tool part awaiting approval, the AG-UI adapter on a run
+  that finishes interrupted for input (AG-UI 1.0 `outcome`), and the OpenAI
+  Agents adapter on `tool_approval_requested`.
+
+### Changed
+
+- The AI SDK adapter counts a `tool-input-error` (tool arguments the model got
+  wrong) as an error.
+
 ## [0.8.0] — 2026-11-26
 
 ### Added

@@ -5,12 +5,20 @@
 // stream chunks and `useChat` messages alike. Framework-free and server-safe.
 
 import type { AgentEvent } from './types';
+import type { AgentAttention } from './stream-core';
 
-export type { AgentEvent };
+export type { AgentEvent, AgentAttention };
 
-/** Where events go: an `AgentStream` (or anything with its `push`). */
+/**
+ * Where events go: an `AgentStream` (or anything with its `push`). With
+ * `attention`, adapters also say when an agent needs the person (a tool
+ * waiting for approval, a run interrupted for input).
+ */
 export interface EventSink {
   push(agentId: string, event: AgentEvent): void;
+  attention?(agentId: string, attention: AgentAttention): void;
+  /** Names the agents an adapter adds (subagents, handed-off agents). */
+  describe?(agentId: string, info: { name?: string }): void;
 }
 
 export interface AdapterOptions {
@@ -37,7 +45,15 @@ export type AiSdkPart = {
   toolCallId?: string;
   /** A partial result of a tool that streams its output (still running). */
   preliminary?: boolean;
+  /** On `tool-approval-request` (`streamText`): the call awaiting approval. */
+  toolCall?: { toolName?: string; toolCallId?: string };
 };
+
+const needsApproval = (sink: EventSink, agentId: string, tool: string) =>
+  sink.attention?.(agentId, {
+    reason: 'needs-you',
+    message: tool ? `needs your approval for ${tool.slice(0, 64)}` : 'needs your approval',
+  });
 
 /**
  * Returns a function to call with every stream part; it pushes the matching
@@ -56,6 +72,9 @@ export function createAiSdkTap(sink: EventSink, agentId: string, options: Adapte
   const push = (e: AgentEvent) => sink.push(agentId, e);
   // Between a request's start and its finish.
   let running = false;
+  // A call waiting for approval (its tool name): the run's finish comes
+  // after the request, and the agent still needs the person then.
+  let awaiting: string | null = null;
   return (p) => {
     if (!p || typeof p.type !== 'string' || p.preliminary === true) return;
     switch (p.type) {
@@ -66,6 +85,7 @@ export function createAiSdkTap(sink: EventSink, agentId: string, options: Adapte
       case 'start-step':
         if (p.type === 'start' || !running) push({ type: 'start' });
         running = true;
+        awaiting = null;
         break;
       case 'text-delta':
       case 'reasoning-delta':
@@ -82,11 +102,23 @@ export function createAiSdkTap(sink: EventSink, agentId: string, options: Adapte
         push({ type: 'tool-start', name });
         break;
       }
+      // The call waits on the person: the agent needs you until it's answered.
+      case 'tool-approval-request': {
+        const callId = p.toolCallId ?? p.toolCall?.toolCallId ?? '';
+        awaiting = p.toolName ?? p.toolCall?.toolName ?? names.get(callId) ?? '';
+        needsApproval(sink, agentId, awaiting);
+        break;
+      }
+      // Arguments the model got wrong: the call never ran.
+      case 'tool-input-error':
+        push({ type: 'error' });
+        break;
       case 'tool-result':
       case 'tool-error':
       case 'tool-output-available':
       case 'tool-output-error':
       case 'tool-output-denied':
+        awaiting = null;
         push({
           type: 'tool-end',
           name: p.toolName ?? names.get(p.toolCallId ?? '') ?? '',
@@ -103,6 +135,8 @@ export function createAiSdkTap(sink: EventSink, agentId: string, options: Adapte
         names.clear();
         running = false;
         push({ type: 'finish' });
+        // Still waiting for the person's answer: say so after the finish.
+        if (awaiting !== null) needsApproval(sink, agentId, awaiting);
         break;
     }
   };
@@ -132,7 +166,7 @@ export async function tapAiSdkStream(
     sink.push(agentId, { type: 'finish' });
     throw err;
   }
-  if (!ended) sink.push(agentId, { type: 'finish' });
+  if (!ended) tap({ type: 'finish' });
 }
 
 export interface ChatTrackerOptions extends AdapterOptions {
@@ -264,6 +298,7 @@ export function createChatTracker(
         toolNames.set(callId, nameOf(p));
         flush();
         const name = nameOf(p);
+        if (state === 'approval-requested') needsApproval(sink, agentId, name);
         const done = DONE.has(state);
         // A call can go from streaming its input to done between two calls.
         if (!OPEN.has(prev ?? '') && (OPEN.has(state) || done)) push({ type: 'tool-start', name });

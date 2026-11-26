@@ -1,6 +1,6 @@
 {
   "name": "@dan-build/agentstat",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Live telemetry for LLM agents in React — token rate, progress, status, health and stall/spike/thrash detection on one canvas.",
   "author": "dan-build",
   "license": "MIT",
@@ -69,6 +69,26 @@
         "default": "./dist/otel.cjs"
       }
     },
+    "./claude-agent-sdk": {
+      "import": {
+        "types": "./dist/claude-agent-sdk.d.ts",
+        "default": "./dist/claude-agent-sdk.js"
+      },
+      "require": {
+        "types": "./dist/claude-agent-sdk.d.cts",
+        "default": "./dist/claude-agent-sdk.cjs"
+      }
+    },
+    "./openai-agents": {
+      "import": {
+        "types": "./dist/openai-agents.d.ts",
+        "default": "./dist/openai-agents.js"
+      },
+      "require": {
+        "types": "./dist/openai-agents.d.cts",
+        "default": "./dist/openai-agents.cjs"
+      }
+    },
     "./package.json": "./package.json"
   },
   "typesVersions": {
@@ -87,6 +107,12 @@
       ],
       "otel": [
         "./dist/otel.d.ts"
+      ],
+      "claude-agent-sdk": [
+        "./dist/claude-agent-sdk.d.ts"
+      ],
+      "openai-agents": [
+        "./dist/openai-agents.d.ts"
       ]
     }
   },

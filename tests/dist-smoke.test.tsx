@@ -122,3 +122,21 @@ describe.skipIf(!aiSdk || !agUi || !langchain)('built adapters', () => {
     expect(got).toEqual(['start', 'tool-start', 'tool-end', 'start', 'finish', 'tool-start', 'tool-end', 'finish']);
   });
 });
+
+const CLAUDE_AGENT = '../dist/claude-agent-sdk.js';
+const OPENAI_AGENTS = '../dist/openai-agents.js';
+const claudeAgent: typeof import('../src/claude-agent-sdk') | null = await import(/* @vite-ignore */ CLAUDE_AGENT).catch(() => null);
+const openAiAgents: typeof import('../src/openai-agents') | null = await import(/* @vite-ignore */ OPENAI_AGENTS).catch(() => null);
+
+describe.skipIf(!claudeAgent || !openAiAgents)('built agent SDK adapters', () => {
+  it('map a Claude Agent SDK run and an OpenAI Agents run', () => {
+    const got: string[] = [];
+    const sink = { push: (_id: string, e: { type: string }) => got.push(e.type) };
+    const claude = claudeAgent!.createClaudeAgentTap(sink);
+    claude({ type: 'system', subtype: 'init' });
+    claude({ type: 'result', total_cost_usd: 0.01 });
+    const openai = openAiAgents!.createOpenAiAgentsTap(sink);
+    openai({ type: 'raw_model_stream_event', data: { type: 'response_started' } });
+    expect(got).toEqual(['start', 'finish', 'cost', 'start']);
+  });
+});
