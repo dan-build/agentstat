@@ -16,6 +16,7 @@ use crate::{DEFAULT_PORT, client};
 
 mod codex;
 mod cursor;
+mod gemini;
 
 /// The launchd job's label (and its plist's file name).
 pub const LABEL: &str = "io.github.dan-build.agentstat";
@@ -582,11 +583,12 @@ pub fn connect(target: Option<&str>, port: u16, c: Confirm) -> ExitCode {
         Some("claude") => connect_claude(&out, port, c),
         Some("codex") => codex::connect(&out, port, c),
         Some("cursor") => cursor::connect(&out, port, c),
+        Some("gemini") => gemini::connect(&out, port, c),
         Some(other) => Err(format!(
-            "`{other}` isn't supported yet; today: claude, codex, cursor. Anything that speaks OpenTelemetry can \
+            "`{other}` isn't supported yet; today: claude, codex, cursor, gemini. Anything that speaks OpenTelemetry can \
              already report with `agentstat run -- <command>`."
         )),
-        None => Err("connect what? agentstat connect claude (or codex, cursor)".into()),
+        None => Err("connect what? agentstat connect claude (or codex, cursor, gemini)".into()),
     })
 }
 
@@ -596,8 +598,9 @@ pub fn disconnect(target: Option<&str>, _port: u16, c: Confirm) -> ExitCode {
         Some("claude") => disconnect_claude(&out, c),
         Some("codex") => codex::disconnect(&out, _port, c),
         Some("cursor") => cursor::disconnect(&out, c),
-        Some(other) => Err(format!("`{other}` isn't supported; today: claude, codex, cursor")),
-        None => Err("disconnect what? agentstat disconnect claude (or codex, cursor)".into()),
+        Some("gemini") => gemini::disconnect(&out, c),
+        Some(other) => Err(format!("`{other}` isn't supported; today: claude, codex, cursor, gemini")),
+        None => Err("disconnect what? agentstat disconnect claude (or codex, cursor, gemini)".into()),
     })
 }
 
@@ -849,6 +852,7 @@ pub fn doctor(port: u16) -> ExitCode {
 
     codex::doctor(&out, &home, port);
     cursor::doctor(&out, &home, port);
+    gemini::doctor(&out, &home, port);
 
     // Notifications come from the app; macOS may have them off for it (an
     // app that never asked is often registered with them off).

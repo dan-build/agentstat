@@ -22,7 +22,7 @@ use serde_json::Value;
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::claude::{Mapper, Output, Reason, Tool, is_claude, is_codex};
+use crate::claude::{Mapper, Output, Reason, Tool, is_claude, is_codex, is_gemini};
 use crate::history::{self, Budget, Day, History};
 use crate::now_ms;
 use crate::otlp::log_records;
@@ -61,6 +61,7 @@ pub struct Daemon {
     claude: Mapper,
     codex: Mapper,
     cursor: Mapper,
+    gemini: Mapper,
     cfg: AnomalyConfig,
     /// When each agent was last heard from, for idle removal.
     last_seen: HashMap<String, f64>,
@@ -127,6 +128,7 @@ impl Daemon {
             claude: Mapper::new(Tool::Claude),
             codex: Mapper::new(Tool::Codex),
             cursor: Mapper::new(Tool::Cursor),
+            gemini: Mapper::new(Tool::Gemini),
             cfg: AnomalyConfig::default(),
             last_seen: HashMap::new(),
             needs: HashMap::new(),
@@ -184,6 +186,7 @@ impl Daemon {
                 self.claude.forget(id);
                 self.codex.forget(id);
                 self.cursor.forget(id);
+                self.gemini.forget(id);
             }
             MsgBody::Attention { id, reason: Reason::NeedsYou, message, time, .. } => {
                 if self.store.agent(id).is_some() {
@@ -200,6 +203,8 @@ impl Daemon {
         for r in log_records(body) {
             let out = if is_codex(&r) {
                 self.codex.map(&r, now)
+            } else if is_gemini(&r) {
+                self.gemini.map(&r, now)
             } else if is_claude(&r) {
                 self.claude.map(&r, now)
             } else {
@@ -226,6 +231,7 @@ impl Daemon {
             Tool::Claude => &mut self.claude,
             Tool::Codex => &mut self.codex,
             Tool::Cursor => &mut self.cursor,
+            Tool::Gemini => &mut self.gemini,
         };
         let out = mapper.map_hook_in(body, app, now);
         self.emit(out, now)
@@ -266,6 +272,7 @@ impl Daemon {
         let mut finished = self.claude.flush(now);
         finished.extend(self.codex.flush(now));
         finished.extend(self.cursor.flush(now));
+        finished.extend(self.gemini.flush(now));
         self.emit(finished, now);
         for e in self.store.health_tick(now, true, &self.cfg) {
             let (id, name, a, resolved) = match e {
@@ -284,8 +291,12 @@ impl Daemon {
                     None
                 };
                 if let Some(reason) = reason {
-                    let app =
-                        self.claude.app_of(&id).or_else(|| self.codex.app_of(&id)).or_else(|| self.cursor.app_of(&id));
+                    let app = self
+                        .claude
+                        .app_of(&id)
+                        .or_else(|| self.codex.app_of(&id))
+                        .or_else(|| self.cursor.app_of(&id))
+                        .or_else(|| self.gemini.app_of(&id));
                     self.log.attention(&id, reason, a.message.clone(), app, now);
                 }
             }
@@ -475,6 +486,7 @@ pub fn router(state: Shared, port: u16) -> Router {
         .route("/v1/hooks/claude", post(hook).layer(DefaultBodyLimit::max(MAX_HOOK_BODY)))
         .route("/v1/hooks/codex", post(codex_hook).layer(DefaultBodyLimit::max(MAX_HOOK_BODY)))
         .route("/v1/hooks/cursor", post(cursor_hook).layer(DefaultBodyLimit::max(MAX_HOOK_BODY)))
+        .route("/v1/hooks/gemini", post(gemini_hook).layer(DefaultBodyLimit::max(MAX_HOOK_BODY)))
         // Accepted so exporters configured for every signal don't error; not read yet.
         .route("/v1/metrics", post(|| async { Json(serde_json::json!({})) }))
         .route("/v1/traces", post(|| async { Json(serde_json::json!({})) }))
@@ -540,6 +552,11 @@ async fn codex_hook(state: State<Shared>, headers: HeaderMap, body: Bytes) -> Re
 /// A Cursor hook (the commands `agentstat connect cursor` adds post each one's JSON input).
 async fn cursor_hook(state: State<Shared>, headers: HeaderMap, body: Bytes) -> Response {
     hook_from(Tool::Cursor, state, headers, body)
+}
+
+/// A Gemini CLI hook (the commands `agentstat connect gemini` adds post each one's JSON input).
+async fn gemini_hook(state: State<Shared>, headers: HeaderMap, body: Bytes) -> Response {
+    hook_from(Tool::Gemini, state, headers, body)
 }
 
 fn hook_from(tool: Tool, State(state): State<Shared>, headers: HeaderMap, body: Bytes) -> Response {

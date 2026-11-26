@@ -17,7 +17,7 @@ away, or when its status keeps flipping. It comes in two forms:
   one canvas, about 22 KB min+gzip, no dependencies besides React.
   [Quick start ↓](#quick-start)
 - **A macOS app and command line** for the coding agents on your machine:
-  every Claude Code, Codex and Cursor session, live, local only.
+  every Claude Code, Codex, Cursor and Gemini CLI session, live, local only.
   [Get the app ↓](#the-macos-app)
 
 <picture>
@@ -605,9 +605,9 @@ Evergreen browsers from 2022 on: Chrome/Edge 94+, Firefox 93+, Safari 15.4+.
 ## The macOS app
 
 A native app and an `agentstat` command for watching the agents on your own
-machine: Claude Code, Codex and Cursor sessions (and their subagents, where the
-agent reports them), and anything that speaks OpenTelemetry through
-`agentstat run`. macOS 12 or later, Apple Silicon and Intel.
+machine: Claude Code, Codex, Cursor and Gemini CLI sessions (and their
+subagents, where the agent reports them), and anything that speaks
+OpenTelemetry through `agentstat run`. macOS 12 or later, Apple Silicon and Intel.
 
 ```bash
 curl -fsSL https://github.com/dan-build/agentstat/releases/download/app-v0.4.0/install.sh | sh -s -- --app
@@ -646,7 +646,16 @@ finishes, and no tokens or cost to local hooks, so a Cursor session shows its
 turns and tools, reads as waiting while it works, and counts as stalled only
 after minutes of silence. Its CLI reports tools but no turns.
 
-In the app, Codex and Cursor sessions carry a small tag next to their project.
+For Gemini CLI, `agentstat connect gemini` edits `~/.gemini/settings.json`:
+telemetry sent here (tokens per model call, with prompt and response text
+left out of it; telemetry you already send elsewhere is left alone), and
+hooks for turns, tools and permission prompts, after any you already have.
+Gemini CLI reports no cost, and no tool call ids: two calls of the same tool
+running at once can't be told apart. A `settings.json` with comments isn't
+edited; `connect gemini --dry-run` shows what to add by hand.
+
+In the app, Codex, Cursor and Gemini CLI sessions carry a small tag next to
+their project.
 
 `agentstat doctor` checks the whole chain. `agentstat disconnect claude` (or
 `codex`) and `agentstat service uninstall` undo it. `agentstat watch` is a live table in the

@@ -6,6 +6,7 @@
 pub mod claude;
 pub mod client;
 pub mod cursor;
+pub mod gemini;
 pub mod history;
 pub mod otlp;
 pub mod server;

@@ -573,6 +573,8 @@ fn source_tag(id: &str) -> Option<&'static str> {
         Some("Codex")
     } else if id.starts_with("cursor:") {
         Some("Cursor")
+    } else if id.starts_with("gemini:") {
+        Some("Gemini")
     } else {
         None
     }
@@ -1027,7 +1029,10 @@ impl AgentStatApp {
                     "The agentstat command isn't installed",
                     "Install it with the script on agentstat.sdaniel.cc/docs/macos-app",
                 ),
-                _ => ("No agents yet", "Connect an agent in a terminal: agentstat connect claude (or codex, cursor)"),
+                _ => (
+                    "No agents yet",
+                    "Connect an agent in a terminal: agentstat connect claude (or codex, cursor, gemini)",
+                ),
             };
             return div()
                 .flex_1()
