@@ -14,6 +14,8 @@ use serde_json::{Map, Value};
 
 use crate::{DEFAULT_PORT, client};
 
+mod codex;
+
 /// The launchd job's label (and its plist's file name).
 pub const LABEL: &str = "io.github.dan-build.agentstat";
 /// Where Claude Code's plugin comes from: this repository's marketplace.
@@ -577,11 +579,12 @@ pub fn connect(target: Option<&str>, port: u16, c: Confirm) -> ExitCode {
     let out = Out::new();
     finish(match target {
         Some("claude") => connect_claude(&out, port, c),
+        Some("codex") => codex::connect(&out, port, c),
         Some(other) => Err(format!(
-            "`{other}` isn't supported yet; today: claude. Anything that speaks OpenTelemetry can \
+            "`{other}` isn't supported yet; today: claude, codex. Anything that speaks OpenTelemetry can \
              already report with `agentstat run -- <command>`."
         )),
-        None => Err("connect what? agentstat connect claude".into()),
+        None => Err("connect what? agentstat connect claude (or codex)".into()),
     })
 }
 
@@ -589,8 +592,9 @@ pub fn disconnect(target: Option<&str>, _port: u16, c: Confirm) -> ExitCode {
     let out = Out::new();
     finish(match target {
         Some("claude") => disconnect_claude(&out, c),
-        Some(other) => Err(format!("`{other}` isn't supported; today: claude")),
-        None => Err("disconnect what? agentstat disconnect claude".into()),
+        Some("codex") => codex::disconnect(&out, _port, c),
+        Some(other) => Err(format!("`{other}` isn't supported; today: claude, codex")),
+        None => Err("disconnect what? agentstat disconnect claude (or codex)".into()),
     })
 }
 
@@ -839,6 +843,8 @@ pub fn doctor(port: u16) -> ExitCode {
             }
         }
     }
+
+    codex::doctor(&out, &home, port);
 
     // Notifications come from the app; macOS may have them off for it (an
     // app that never asked is often registered with them off).

@@ -81,7 +81,7 @@ function App() {
         <div className="empty">
           <p className="title">No agents yet</p>
           <p className="note">
-            In Claude Code, install the AgentStat plugin, or run <code>agentstat run -- claude</code>.
+            Connect an agent in a terminal: <code>agentstat connect claude</code> or <code>agentstat connect codex</code>.
           </p>
         </div>
       )}

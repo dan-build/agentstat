@@ -1,0 +1,922 @@
+{
+ "resourceLogs": [
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "codex_cli_rs"
+      }
+     },
+     {
+      "key": "service.version",
+      "value": {
+       "stringValue": "0.172.0"
+      }
+     },
+     {
+      "key": "env",
+      "value": {
+       "stringValue": "dev"
+      }
+     }
+    ]
+   },
+   "scopeLogs": [
+    {
+     "scope": {
+      "name": "codex_otel"
+     },
+     "logRecords": [
+      {
+       "timeUnixNano": "1795600000000000000",
+       "observedTimeUnixNano": "1795600000000000000",
+       "severityText": "INFO",
+       "attributes": [
+        {
+         "key": "conversation.id",
+         "value": {
+          "stringValue": "019a6f3c-7e2b-7c41-9d0e-5b8f1a2c3d4e"
+         }
+        },
+        {
+         "key": "app.version",
+         "value": {
+          "stringValue": "0.172.0"
+         }
+        },
+        {
+         "key": "auth_mode",
+         "value": {
+          "stringValue": "chatgpt"
+         }
+        },
+        {
+         "key": "originator",
+         "value": {
+          "stringValue": "codex_cli_rs"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "acct-redacted"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "someone@example.com"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "Apple_Terminal"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "gpt-5.5-codex"
+         }
+        },
+        {
+         "key": "slug",
+         "value": {
+          "stringValue": "gpt-5.5-codex"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-11-25T10:00:00.000Z"
+         }
+        },
+        {
+         "key": "provider_name",
+         "value": {
+          "stringValue": "openai"
+         }
+        },
+        {
+         "key": "approval_policy",
+         "value": {
+          "stringValue": "on-request"
+         }
+        },
+        {
+         "key": "sandbox_policy",
+         "value": {
+          "stringValue": "workspace-write"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "codex.conversation_starts"
+         }
+        }
+       ]
+      },
+      {
+       "timeUnixNano": "1795600000100000000",
+       "observedTimeUnixNano": "1795600000100000000",
+       "severityText": "INFO",
+       "attributes": [
+        {
+         "key": "conversation.id",
+         "value": {
+          "stringValue": "019a6f3c-7e2b-7c41-9d0e-5b8f1a2c3d4e"
+         }
+        },
+        {
+         "key": "app.version",
+         "value": {
+          "stringValue": "0.172.0"
+         }
+        },
+        {
+         "key": "auth_mode",
+         "value": {
+          "stringValue": "chatgpt"
+         }
+        },
+        {
+         "key": "originator",
+         "value": {
+          "stringValue": "codex_cli_rs"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "acct-redacted"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "someone@example.com"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "Apple_Terminal"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "gpt-5.5-codex"
+         }
+        },
+        {
+         "key": "slug",
+         "value": {
+          "stringValue": "gpt-5.5-codex"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-11-25T10:00:00.000Z"
+         }
+        },
+        {
+         "key": "prompt_length",
+         "value": {
+          "stringValue": "42"
+         }
+        },
+        {
+         "key": "prompt",
+         "value": {
+          "stringValue": "[REDACTED]"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "codex.user_prompt"
+         }
+        }
+       ]
+      },
+      {
+       "timeUnixNano": "1795600001900000000",
+       "observedTimeUnixNano": "1795600001900000000",
+       "severityText": "INFO",
+       "attributes": [
+        {
+         "key": "conversation.id",
+         "value": {
+          "stringValue": "019a6f3c-7e2b-7c41-9d0e-5b8f1a2c3d4e"
+         }
+        },
+        {
+         "key": "app.version",
+         "value": {
+          "stringValue": "0.172.0"
+         }
+        },
+        {
+         "key": "auth_mode",
+         "value": {
+          "stringValue": "chatgpt"
+         }
+        },
+        {
+         "key": "originator",
+         "value": {
+          "stringValue": "codex_cli_rs"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "acct-redacted"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "someone@example.com"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "Apple_Terminal"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "gpt-5.5-codex"
+         }
+        },
+        {
+         "key": "slug",
+         "value": {
+          "stringValue": "gpt-5.5-codex"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-11-25T10:00:00.000Z"
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "stringValue": "1800"
+         }
+        },
+        {
+         "key": "http.response.status_code",
+         "value": {
+          "stringValue": "200"
+         }
+        },
+        {
+         "key": "attempt",
+         "value": {
+          "stringValue": "1"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "codex.api_request"
+         }
+        }
+       ]
+      },
+      {
+       "timeUnixNano": "1795600004100000000",
+       "observedTimeUnixNano": "1795600004100000000",
+       "severityText": "INFO",
+       "attributes": [
+        {
+         "key": "conversation.id",
+         "value": {
+          "stringValue": "019a6f3c-7e2b-7c41-9d0e-5b8f1a2c3d4e"
+         }
+        },
+        {
+         "key": "app.version",
+         "value": {
+          "stringValue": "0.172.0"
+         }
+        },
+        {
+         "key": "auth_mode",
+         "value": {
+          "stringValue": "chatgpt"
+         }
+        },
+        {
+         "key": "originator",
+         "value": {
+          "stringValue": "codex_cli_rs"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "acct-redacted"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "someone@example.com"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "Apple_Terminal"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "gpt-5.5-codex"
+         }
+        },
+        {
+         "key": "slug",
+         "value": {
+          "stringValue": "gpt-5.5-codex"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-11-25T10:00:00.000Z"
+         }
+        },
+        {
+         "key": "event.kind",
+         "value": {
+          "stringValue": "response.completed"
+         }
+        },
+        {
+         "key": "input_token_count",
+         "value": {
+          "stringValue": "5120"
+         }
+        },
+        {
+         "key": "output_token_count",
+         "value": {
+          "stringValue": "180"
+         }
+        },
+        {
+         "key": "cached_token_count",
+         "value": {
+          "intValue": "4096"
+         }
+        },
+        {
+         "key": "reasoning_token_count",
+         "value": {
+          "intValue": "64"
+         }
+        },
+        {
+         "key": "tool_token_count",
+         "value": {
+          "stringValue": "5300"
+         }
+        },
+        {
+         "key": "ttft_ms",
+         "value": {
+          "intValue": "900"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "codex.sse_event"
+         }
+        }
+       ]
+      },
+      {
+       "timeUnixNano": "1795600004300000000",
+       "observedTimeUnixNano": "1795600004300000000",
+       "severityText": "INFO",
+       "attributes": [
+        {
+         "key": "conversation.id",
+         "value": {
+          "stringValue": "019a6f3c-7e2b-7c41-9d0e-5b8f1a2c3d4e"
+         }
+        },
+        {
+         "key": "app.version",
+         "value": {
+          "stringValue": "0.172.0"
+         }
+        },
+        {
+         "key": "auth_mode",
+         "value": {
+          "stringValue": "chatgpt"
+         }
+        },
+        {
+         "key": "originator",
+         "value": {
+          "stringValue": "codex_cli_rs"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "acct-redacted"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "someone@example.com"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "Apple_Terminal"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "gpt-5.5-codex"
+         }
+        },
+        {
+         "key": "slug",
+         "value": {
+          "stringValue": "gpt-5.5-codex"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-11-25T10:00:00.000Z"
+         }
+        },
+        {
+         "key": "tool_name",
+         "value": {
+          "stringValue": "shell"
+         }
+        },
+        {
+         "key": "call_id",
+         "value": {
+          "stringValue": "call_A1"
+         }
+        },
+        {
+         "key": "decision",
+         "value": {
+          "stringValue": "approved"
+         }
+        },
+        {
+         "key": "source",
+         "value": {
+          "stringValue": "config"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "codex.tool_decision"
+         }
+        }
+       ]
+      },
+      {
+       "timeUnixNano": "1795600006400000000",
+       "observedTimeUnixNano": "1795600006400000000",
+       "severityText": "INFO",
+       "attributes": [
+        {
+         "key": "conversation.id",
+         "value": {
+          "stringValue": "019a6f3c-7e2b-7c41-9d0e-5b8f1a2c3d4e"
+         }
+        },
+        {
+         "key": "app.version",
+         "value": {
+          "stringValue": "0.172.0"
+         }
+        },
+        {
+         "key": "auth_mode",
+         "value": {
+          "stringValue": "chatgpt"
+         }
+        },
+        {
+         "key": "originator",
+         "value": {
+          "stringValue": "codex_cli_rs"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "acct-redacted"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "someone@example.com"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "Apple_Terminal"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "gpt-5.5-codex"
+         }
+        },
+        {
+         "key": "slug",
+         "value": {
+          "stringValue": "gpt-5.5-codex"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-11-25T10:00:00.000Z"
+         }
+        },
+        {
+         "key": "tool_result_seq",
+         "value": {
+          "stringValue": "1"
+         }
+        },
+        {
+         "key": "tool_name",
+         "value": {
+          "stringValue": "shell"
+         }
+        },
+        {
+         "key": "call_id",
+         "value": {
+          "stringValue": "call_A1"
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "stringValue": "2100"
+         }
+        },
+        {
+         "key": "success",
+         "value": {
+          "stringValue": "true"
+         }
+        },
+        {
+         "key": "output_truncated",
+         "value": {
+          "stringValue": "false"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "codex.tool_result"
+         }
+        }
+       ]
+      },
+      {
+       "timeUnixNano": "1795600007200000000",
+       "observedTimeUnixNano": "1795600007200000000",
+       "severityText": "INFO",
+       "attributes": [
+        {
+         "key": "conversation.id",
+         "value": {
+          "stringValue": "019a6f3c-7e2b-7c41-9d0e-5b8f1a2c3d4e"
+         }
+        },
+        {
+         "key": "app.version",
+         "value": {
+          "stringValue": "0.172.0"
+         }
+        },
+        {
+         "key": "auth_mode",
+         "value": {
+          "stringValue": "chatgpt"
+         }
+        },
+        {
+         "key": "originator",
+         "value": {
+          "stringValue": "codex_cli_rs"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "acct-redacted"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "someone@example.com"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "Apple_Terminal"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "gpt-5.5-codex"
+         }
+        },
+        {
+         "key": "slug",
+         "value": {
+          "stringValue": "gpt-5.5-codex"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-11-25T10:00:00.000Z"
+         }
+        },
+        {
+         "key": "duration_ms",
+         "value": {
+          "stringValue": "700"
+         }
+        },
+        {
+         "key": "http.response.status_code",
+         "value": {
+          "stringValue": "200"
+         }
+        },
+        {
+         "key": "attempt",
+         "value": {
+          "stringValue": "1"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "codex.api_request"
+         }
+        }
+       ]
+      },
+      {
+       "timeUnixNano": "1795600009000000000",
+       "observedTimeUnixNano": "1795600009000000000",
+       "severityText": "INFO",
+       "attributes": [
+        {
+         "key": "conversation.id",
+         "value": {
+          "stringValue": "019a6f3c-7e2b-7c41-9d0e-5b8f1a2c3d4e"
+         }
+        },
+        {
+         "key": "app.version",
+         "value": {
+          "stringValue": "0.172.0"
+         }
+        },
+        {
+         "key": "auth_mode",
+         "value": {
+          "stringValue": "chatgpt"
+         }
+        },
+        {
+         "key": "originator",
+         "value": {
+          "stringValue": "codex_cli_rs"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "acct-redacted"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "someone@example.com"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "Apple_Terminal"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "gpt-5.5-codex"
+         }
+        },
+        {
+         "key": "slug",
+         "value": {
+          "stringValue": "gpt-5.5-codex"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-11-25T10:00:00.000Z"
+         }
+        },
+        {
+         "key": "event.kind",
+         "value": {
+          "stringValue": "response.completed"
+         }
+        },
+        {
+         "key": "input_token_count",
+         "value": {
+          "stringValue": "5600"
+         }
+        },
+        {
+         "key": "output_token_count",
+         "value": {
+          "stringValue": "240"
+         }
+        },
+        {
+         "key": "cached_token_count",
+         "value": {
+          "intValue": "5120"
+         }
+        },
+        {
+         "key": "reasoning_token_count",
+         "value": {
+          "intValue": "32"
+         }
+        },
+        {
+         "key": "tool_token_count",
+         "value": {
+          "stringValue": "5840"
+         }
+        },
+        {
+         "key": "ttft_ms",
+         "value": {
+          "intValue": "600"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "codex.sse_event"
+         }
+        }
+       ]
+      },
+      {
+       "timeUnixNano": "1795600009050000000",
+       "observedTimeUnixNano": "1795600009050000000",
+       "severityText": "INFO",
+       "attributes": [
+        {
+         "key": "conversation.id",
+         "value": {
+          "stringValue": "019a6f3c-7e2b-7c41-9d0e-5b8f1a2c3d4e"
+         }
+        },
+        {
+         "key": "app.version",
+         "value": {
+          "stringValue": "0.172.0"
+         }
+        },
+        {
+         "key": "auth_mode",
+         "value": {
+          "stringValue": "chatgpt"
+         }
+        },
+        {
+         "key": "originator",
+         "value": {
+          "stringValue": "codex_cli_rs"
+         }
+        },
+        {
+         "key": "user.account_id",
+         "value": {
+          "stringValue": "acct-redacted"
+         }
+        },
+        {
+         "key": "user.email",
+         "value": {
+          "stringValue": "someone@example.com"
+         }
+        },
+        {
+         "key": "terminal.type",
+         "value": {
+          "stringValue": "Apple_Terminal"
+         }
+        },
+        {
+         "key": "model",
+         "value": {
+          "stringValue": "gpt-5.5-codex"
+         }
+        },
+        {
+         "key": "slug",
+         "value": {
+          "stringValue": "gpt-5.5-codex"
+         }
+        },
+        {
+         "key": "event.timestamp",
+         "value": {
+          "stringValue": "2026-11-25T10:00:00.000Z"
+         }
+        },
+        {
+         "key": "turn.id",
+         "value": {
+          "stringValue": "turn-1"
+         }
+        },
+        {
+         "key": "usage.estimated_usd",
+         "value": {
+          "stringValue": "0.0123"
+         }
+        },
+        {
+         "key": "turn.interrupted",
+         "value": {
+          "stringValue": "false"
+         }
+        },
+        {
+         "key": "event.name",
+         "value": {
+          "stringValue": "codex.turn_cost"
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

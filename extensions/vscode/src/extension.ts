@@ -63,7 +63,7 @@ function render(item: vscode.StatusBarItem, snap: Snapshot | null) {
   }
   const tip = new vscode.MarkdownString(undefined, true);
   if (agents.length === 0) {
-    tip.appendMarkdown('No agents yet. In Claude Code, install the AgentStat plugin, or run `agentstat run -- claude`.');
+    tip.appendMarkdown('No agents yet. Connect an agent in a terminal: `agentstat connect claude` or `agentstat connect codex`.');
   } else {
     tip.appendMarkdown('| Agent | Status | Tokens |\n|:--|:--|--:|\n');
     for (const a of agents) {

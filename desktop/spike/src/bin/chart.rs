@@ -12,8 +12,8 @@ use std::{
 };
 
 use gpui::{
-    App, Application, Bounds, Context, Hsla, Path, PathBuilder, Pixels, Point, Window, WindowBounds, WindowOptions, canvas, div,
-    fill, point, prelude::*, px, rgb, size,
+    App, Application, Bounds, Context, Hsla, Path, PathBuilder, Pixels, Point, Window, WindowBounds, WindowOptions,
+    canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 
 const PALETTE: [u32; 8] = [0x2563eb, 0xd9480f, 0x0f8a5f, 0xc2255c, 0x7048e8, 0x0b7285, 0xa16207, 0x3f3f46];
@@ -173,10 +173,7 @@ impl Render for Chart {
                     // Gridlines.
                     for i in 0..=4 {
                         let y = y0 + h * i as f32 / 4.0;
-                        window.paint_quad(fill(
-                            Bounds::new(point(px(x0), px(y)), size(px(w), px(1.))),
-                            rgb(0xe8e6e1),
-                        ));
+                        window.paint_quad(fill(Bounds::new(point(px(x0), px(y)), size(px(w), px(1.))), rgb(0xe8e6e1)));
                     }
 
                     if grouped {
@@ -284,7 +281,11 @@ fn main() {
         let bounds = Bounds::centered(None, size(px(1100.), px(640.)), cx);
         let window = cx
             .open_window(
-                WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), focus: true, ..Default::default() },
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    focus: true,
+                    ..Default::default()
+                },
                 |_, cx| cx.new(Chart::new),
             )
             .unwrap();
@@ -296,9 +297,7 @@ fn main() {
             cx.background_executor().timer(Duration::from_secs(secs)).await;
             let wall = started.elapsed().as_secs_f64();
             let cpu = cpu_seconds() - cpu0;
-            window
-                .update(cx, |chart, _, _| report(&chart.stats.borrow(), wall, cpu))
-                .ok();
+            window.update(cx, |chart, _, _| report(&chart.stats.borrow(), wall, cpu)).ok();
             cx.update(|cx| cx.quit()).ok();
         })
         .detach();

@@ -17,7 +17,7 @@ away, or when its status keeps flipping. It comes in two forms:
   one canvas, about 22 KB min+gzip, no dependencies besides React.
   [Quick start ↓](#quick-start)
 - **A macOS app and command line** for the coding agents on your machine:
-  every Claude Code session and subagent, live, local only.
+  every Claude Code and Codex session and subagent, live, local only.
   [Get the app ↓](#the-macos-app)
 
 <picture>
@@ -594,8 +594,8 @@ Evergreen browsers from 2022 on: Chrome/Edge 94+, Firefox 93+, Safari 15.4+.
 ## The macOS app
 
 A native app and an `agentstat` command for watching the agents on your own
-machine: Claude Code sessions and their subagents today, anything that speaks
-OpenTelemetry through `agentstat run`. macOS 12 or later, Apple Silicon and Intel.
+machine: Claude Code and Codex sessions and their subagents, and anything that
+speaks OpenTelemetry through `agentstat run`. macOS 12 or later, Apple Silicon and Intel.
 
 ```bash
 curl -fsSL https://github.com/dan-build/agentstat/releases/download/app-v0.3.1/install.sh | sh -s -- --app
@@ -615,8 +615,21 @@ until you say yes:
 3. Point Claude Code's telemetry at the service: tokens and cost per call.
    If its telemetry already goes somewhere else, that's left alone.
 
-`agentstat doctor` checks the whole chain. `agentstat disconnect claude` and
-`agentstat service uninstall` undo it. `agentstat watch` is a live table in the
+For Codex, `agentstat connect codex` does the same in Codex's own config
+(`~/.codex`, or `$CODEX_HOME`):
+
+1. Start the service at login, as above.
+2. Send Codex's telemetry here, from `[otel]` in `config.toml`: tokens per model
+   call and an estimated cost per turn. An exporter you already set is left
+   alone.
+3. Add hooks for turns, tools, subagents and permission prompts, after any
+   hooks you already have. Codex runs new hooks only once you trust them: in
+   Codex, type `/hooks` and press `t` (trust all).
+
+In the app, Codex sessions carry a small "Codex" tag next to their project.
+
+`agentstat doctor` checks the whole chain. `agentstat disconnect claude` (or
+`codex`) and `agentstat service uninstall` undo it. `agentstat watch` is a live table in the
 terminal; `agentstat --help` lists the rest.
 
 The app tells you when an agent needs you, with a macOS notification and in

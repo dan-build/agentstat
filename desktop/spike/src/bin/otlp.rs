@@ -38,7 +38,19 @@ fn show(path: &str, body: &Value) {
             .collect::<Vec<_>>()
             .join(" ")
     };
-    let keys = ["session.id", "type", "model", "tool_name", "decision", "success", "duration_ms", "event.name", "input_tokens", "output_tokens", "cost_usd"];
+    let keys = [
+        "session.id",
+        "type",
+        "model",
+        "tool_name",
+        "decision",
+        "success",
+        "duration_ms",
+        "event.name",
+        "input_tokens",
+        "output_tokens",
+        "cost_usd",
+    ];
     match path {
         "/v1/metrics" => {
             for rm in body["resourceMetrics"].as_array().into_iter().flatten() {
@@ -104,7 +116,9 @@ fn main() -> std::io::Result<()> {
             Ok(v) => show(&path, &v),
             Err(_) => println!("  not JSON (set OTEL_EXPORTER_OTLP_PROTOCOL=http/json)"),
         }
-        stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}")?;
+        stream.write_all(
+            b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
+        )?;
     }
     Ok(())
 }
