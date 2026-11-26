@@ -433,3 +433,47 @@ fn the_agent_list_says_who_needs_you_until_they_move_on() {
     post(base("PostToolUse"));
     assert_eq!(first().needs_you, None);
 }
+
+#[test]
+fn gemini_cli_hooks_and_telemetry_become_one_agent() {
+    let port = start();
+    let host = format!("127.0.0.1:{port}");
+    let post = |path: &str, body: String| {
+        let (status, _) = request(port, "POST", path, &host, &[("Content-Type", "application/json")], &body);
+        assert!(status == 200 || status == 204, "{path}: {status}");
+    };
+    let hook = |event: &str| {
+        serde_json::json!({"session_id": "g-7", "cwd": "/Users/me/code/shop", "hook_event_name": event,
+            "transcript_path": "/x", "timestamp": "2026-11-26T10:00:00Z", "tool_name": "read_file"})
+        .to_string()
+    };
+    post("/v1/hooks/gemini", hook("BeforeAgent"));
+    post("/v1/hooks/gemini", hook("BeforeTool"));
+    let now_ns = format!("{}", (agentstat_daemon::now_ms() as u64) * 1_000_000);
+    let attr = |k: &str, v: serde_json::Value| serde_json::json!({"key": k, "value": v});
+    let logs = serde_json::json!({"resourceLogs": [{
+        "resource": {"attributes": [attr("service.name", serde_json::json!({"stringValue": "gemini-cli"}))]},
+        "scopeLogs": [{"logRecords": [{
+            "timeUnixNano": now_ns,
+            "body": {"stringValue": "API response from gemini-2.5-pro."},
+            "attributes": [
+                attr("event.name", serde_json::json!({"stringValue": "gemini_cli.api_response"})),
+                attr("session.id", serde_json::json!({"stringValue": "g-7"})),
+                attr("output_token_count", serde_json::json!({"intValue": "60"})),
+                attr("thoughts_token_count", serde_json::json!({"intValue": "20"})),
+                attr("duration_ms", serde_json::json!({"intValue": "900"})),
+                attr("response_text", serde_json::json!({"stringValue": "never kept"})),
+            ]
+        }]}]
+    }]});
+    post("/v1/logs", logs.to_string());
+    // Gemini exports traces and metrics too: accepted, so it doesn't log errors.
+    post("/v1/traces", "{}".into());
+    post("/v1/metrics", "{}".into());
+    let (_, resp) = request(port, "GET", "/v1/agents", "localhost", &[], "");
+    let snap = serde_json::from_str::<Snapshot>(body(&resp)).unwrap();
+    let a = &snap.agents[0];
+    assert_eq!((a.id.as_str(), a.name.as_str(), a.tool.as_deref()), ("gemini:g-7", "shop", Some("read_file")));
+    assert_eq!(a.total_tokens, 80.0);
+    assert!(!body(&resp).contains("never kept"));
+}

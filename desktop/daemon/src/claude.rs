@@ -62,6 +62,7 @@ pub enum Tool {
     Claude,
     Codex,
     Cursor,
+    Gemini,
 }
 
 impl Tool {
@@ -75,6 +76,7 @@ impl Tool {
             Tool::Claude => "claude:",
             Tool::Codex => "codex:",
             Tool::Cursor => "cursor:",
+            Tool::Gemini => "gemini:",
         }
     }
 
@@ -84,6 +86,7 @@ impl Tool {
             Tool::Claude => "Claude Code",
             Tool::Codex => "Codex",
             Tool::Cursor => "Cursor",
+            Tool::Gemini => "Gemini CLI",
         }
     }
 }
@@ -116,6 +119,8 @@ const MAX_APP_LEN: usize = 100;
 /// A complete assistant message is the end of the turn only if no more work
 /// follows this soon (the message that asks for a tool comes just before it runs).
 pub const FINISH_DELAY_MS: f64 = 1_500.0;
+/// Gemini CLI without hooks: a turn is over after this long without news.
+pub const GEMINI_QUIET_MS: f64 = 30_000.0;
 
 #[derive(Default)]
 struct Session {
@@ -165,6 +170,11 @@ pub fn is_claude(r: &Record) -> bool {
 /// Whether a record comes from Codex (its event name is an attribute).
 pub fn is_codex(r: &Record) -> bool {
     codex_event(r).is_some()
+}
+
+/// Whether a record comes from Gemini CLI (its event name is an attribute).
+pub fn is_gemini(r: &Record) -> bool {
+    r.str("event.name").is_some_and(|n| n.starts_with("gemini_cli."))
 }
 
 /// A Codex record's event name without its `codex.` prefix.
@@ -226,6 +236,9 @@ impl Mapper {
     pub fn map(&mut self, r: &Record, now: f64) -> Vec<Output> {
         if self.tool == Tool::Codex {
             return self.map_codex(r, now);
+        }
+        if self.tool == Tool::Gemini {
+            return self.map_gemini(r, now);
         }
         let tool = self.tool;
         let mut out = Vec::new();
@@ -434,6 +447,77 @@ impl Mapper {
         out
     }
 
+    /// Map one Gemini CLI telemetry record. Gemini logs each model response's
+    /// tokens and timing (`api_response`), each finished tool (`tool_call`,
+    /// with its start time), each prompt and each failed request. It reads only
+    /// names, counts and timings: never the prompt or response text Gemini
+    /// also logs unless told not to.
+    fn map_gemini(&mut self, r: &Record, now: f64) -> Vec<Output> {
+        let tool = self.tool;
+        let mut out = Vec::new();
+        let Some(event) = r.str("event.name").and_then(|n| n.strip_prefix("gemini_cli.")) else { return out };
+        let Some(sid) = r.str("session.id").filter(|s| !s.is_empty() && s.len() <= MAX_ID_LEN) else { return out };
+        if !self.sessions.contains_key(sid) {
+            if self.sessions.len() >= MAX_SESSIONS {
+                return out;
+            }
+            self.sessions.insert(sid.to_string(), Session::default());
+        }
+        let s = self.sessions.get_mut(sid).expect("inserted above");
+        let t = r.time;
+        let mut events = Vec::new();
+        // Output of a model response: its answer and its thinking.
+        let response = || {
+            let since = t - r.num("duration_ms").unwrap_or(0.0);
+            let count = r.num("output_token_count").unwrap_or(0.0) + r.num("thoughts_token_count").unwrap_or(0.0);
+            (since, Event::Tokens { count: Some(count), total: None, since: Some(since), time: Some(t) })
+        };
+        if s.hooks {
+            if event == "api_response" {
+                events.push(response().1);
+                if s.idle {
+                    events.push(Event::Finish { time: Some(t) });
+                }
+            }
+            emit(tool, sid, s, events, &mut out);
+            return out;
+        }
+        match event {
+            "user_prompt" => {
+                s.tools.clear();
+                s.finish = None;
+                events.push(Event::Start { time: Some(t) });
+            }
+            "api_response" => {
+                let (since, ev) = response();
+                if s.tools.is_empty() {
+                    events.push(Event::Start { time: Some(since) });
+                    // The turn's last reply, unless more work follows. Gemini
+                    // logs a tool only once it's done, so a reply that asked
+                    // for one looks the same: wait for a longer quiet.
+                    s.finish = Some((t, now + GEMINI_QUIET_MS - FINISH_DELAY_MS));
+                }
+                events.push(ev);
+            }
+            "tool_call" => {
+                s.finish = None;
+                let name = r.str("function_name").unwrap_or_default().to_string();
+                let start = r.num("start_time").filter(|x| *x <= t).unwrap_or(t - r.num("duration_ms").unwrap_or(0.0));
+                let error =
+                    r.str("success").map(|v| v != "true").or_else(|| r.attrs.get("success")?.as_bool().map(|b| !b));
+                events.push(Event::ToolStart { name: Some(name.clone()), time: Some(start) });
+                events.push(Event::ToolEnd { name: Some(name), error, time: Some(t) });
+            }
+            "api_error" => {
+                s.finish = None;
+                events.push(Event::Error { time: Some(t) });
+            }
+            _ => {}
+        }
+        emit(tool, sid, s, events, &mut out);
+        out
+    }
+
     /// Map one hook call (its JSON input) received at `now`. Hooks carry no
     /// time of their own; they run as things happen, so `now` is the time.
     pub fn map_hook(&mut self, v: &serde_json::Value, now: f64) -> Vec<Output> {
@@ -448,6 +532,9 @@ impl Mapper {
                 .iter()
                 .flat_map(|shaped| self.map_shaped(shaped, app, now))
                 .collect();
+        }
+        if self.tool == Tool::Gemini {
+            return crate::gemini::translate(v).iter().flat_map(|shaped| self.map_shaped(shaped, app, now)).collect();
         }
         self.map_shaped(v, app, now)
     }

@@ -9,6 +9,7 @@
 //!   agentstat connect claude     set Claude Code up to report here (asks first)
 //!   agentstat connect codex      the same for Codex
 //!   agentstat connect cursor     the same for Cursor
+//!   agentstat connect gemini     the same for Gemini CLI
 //!   agentstat service install    start the service at login
 //!   agentstat doctor             check that everything is in place
 
@@ -33,6 +34,8 @@ Get started:
                                  them once in Codex: /hooks, then t).
   agentstat connect cursor       The same for Cursor: hooks for live turns and
                                  tools (Cursor reports no tokens or cost).
+  agentstat connect gemini       The same for Gemini CLI: telemetry (tokens)
+                                 and hooks for live turns and tools.
   agentstat doctor               Check that everything is in place.
 
 Usage:
@@ -54,7 +57,7 @@ Usage:
   agentstat serve [--port N]     Run the service in the foreground.
   agentstat service install|uninstall|status
                                  Start the service at login (launchd), or stop.
-  agentstat disconnect claude|codex|cursor
+  agentstat disconnect claude|codex|cursor|gemini
                                  Undo `connect` (asks first).
 
 The service listens on 127.0.0.1 only (default port 4318, or $AGENTSTAT_PORT).
@@ -220,9 +223,9 @@ fn run(port: u16, args: &[String]) -> ExitCode {
         return fail(&e);
     }
     // Codex reads its telemetry settings from its config file only.
-    if std::path::Path::new(program).file_name().is_some_and(|n| n == "codex") {
+    if std::path::Path::new(program).file_name().is_some_and(|n| n == "codex" || n == "gemini") {
         eprintln!(
-            "agentstat: Codex ignores the environment this sets; its telemetry and hooks are set up once with `agentstat connect codex`"
+            "agentstat: Codex and Gemini CLI take their telemetry settings from their own config; set them up once with `agentstat connect codex` or `agentstat connect gemini`"
         );
     }
     let endpoint = format!("http://127.0.0.1:{port}");
@@ -279,7 +282,7 @@ fn fit(s: &str, w: usize) -> String {
 fn table(snap: &Snapshot) -> String {
     let mut out = String::new();
     if snap.agents.is_empty() {
-        out.push_str("No agents yet. Connect one with: agentstat connect claude (or codex, cursor)\n");
+        out.push_str("No agents yet. Connect one with: agentstat connect claude (or codex, cursor, gemini)\n");
         return out;
     }
     out.push_str(&format!(

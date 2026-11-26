@@ -85,7 +85,7 @@ function App() {
         <div className="empty">
           <p className="title">No agents yet</p>
           <p className="note">
-            Connect an agent in a terminal: <code>agentstat connect claude</code>, <code>codex</code> or <code>cursor</code>.
+            Connect an agent in a terminal: <code>agentstat connect claude</code>, <code>codex</code>, <code>cursor</code> or <code>gemini</code>.
           </p>
         </div>
       )}
