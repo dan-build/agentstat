@@ -93,6 +93,7 @@ const stream = createAgentStream(); // e.g. module-level, or useAgentStream()
 
 stream.push('coder', { type: 'tokens', count: 7 });
 stream.describe('coder', { name: 'Coder' }); // optional: name, color, config
+stream.attention('coder', { reason: 'needs-you', message: 'needs your permission for bash' }); // optional
 stream.remove('coder');                      // optional
 
 <AgentStat source={stream} metric="tokens" anomalyDetection />
@@ -160,7 +161,8 @@ ref.current?.push('coder', { type: 'tokens', count: 7 });          // → active
 ref.current?.push('coder', { type: 'tool-start', name: 'bash' });  // → waiting
 ref.current?.push('coder', { type: 'tool-end', name: 'bash' });    // → thinking
 ref.current?.push('coder', { type: 'finish' });                    // → complete
-ref.current?.getStats('coder'); // { totalTokens, ttftMs, interTokenMs, tool, statusMs }
+ref.current?.push('coder', { type: 'cost', usd: 0.0125 });         // adds to its cost, nothing else
+ref.current?.getStats('coder'); // { totalTokens, ttftMs, interTokenMs, tool, statusMs, costUsd }
 ```
 
 Every event takes an optional `time` (`performance.now()` clock; a time before
@@ -170,7 +172,16 @@ feeds the health score's latency trend. Send `finish` when a run ends: an
 agent left `active` with no output is a stall.
 
 `total` is a running count for the agent: the first one only sets the starting
-point, and a smaller one than before starts a new count. A status you set with
+point, and a smaller one than before starts a new count. `cost` adds US dollars
+to the agent's total (`costUsd`) and changes nothing else: not its status, and
+not when it was last heard from.
+
+**Attention.** `stream.attention(id, { reason, message })` says an agent needs
+the person: `needs-you` (a permission prompt or a question), `done` (a long
+turn finished), `failed`, `stalled`, `runaway` or `budget`. An agent that
+needs you is marked as such until it does anything after asking. Pass
+`onAttention` to `<AgentStat>` or `useAgentTelemetry` to notify: it fires for
+fresh notices only, not for history a source replays when you connect. A status you set with
 `updateAgent` (`stuck`, `hallucinating`) holds until you change it there.
 
 ### Samples
@@ -323,8 +334,8 @@ More integrations — LangChain, WebSocket/SSE, MCP — are in the
 
 `useAgentTelemetry(source)` runs the same event handling and anomaly
 detection without a canvas, and returns each agent's live status, time in
-status, open tool, rate, tokens, TTFT, health, anomalies and status history
-— for your own UI, or these components:
+status, open tool, rate, tokens, TTFT, health, anomalies, cost, whether it
+needs you, and status history — for your own UI, or these components:
 
 ```tsx
 import { useAgentTelemetry, AgentStatusBadge, AnomalyBanner, AgentRoster, AgentTimeline } from '@dan-build/agentstat';
@@ -332,8 +343,8 @@ import { useAgentTelemetry, AgentStatusBadge, AnomalyBanner, AgentRoster, AgentT
 const agents = useAgentTelemetry(stream);
 
 <AnomalyBanner agents={agents} />                 {/* "Coder: stalled 12s while active" */}
-<AgentRoster agents={agents} />                   {/* status, rate, tokens, health per agent */}
-<AgentStatusBadge agent={agents[0]} />            {/* "Waiting · bash · 12s" */}
+<AgentRoster agents={agents} />                   {/* status, rate, tokens, health (and cost) per agent */}
+<AgentStatusBadge agent={agents[0]} />            {/* "Waiting · bash · 12s", or "Needs you · 40s" */}
 <AgentTimeline agent={agents[0]} />               {/* status over the last 5 minutes */}
 ```
 

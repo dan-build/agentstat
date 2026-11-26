@@ -13,7 +13,7 @@ export {
   AgentTimeline,
 } from './telemetry';
 export type { AgentTelemetry, TelemetryOptions, TelemetryComponentProps } from './telemetry';
-export type { AgentSource, AgentStream, AgentStreamMessage } from './stream';
+export type { AgentAttention, AgentSource, AgentStream, AgentStreamMessage, AttentionReason } from './stream';
 
 export type { AgentStatProps, AgentStatRef } from './AgentStat';
 

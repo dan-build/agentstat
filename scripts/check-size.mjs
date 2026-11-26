@@ -26,7 +26,10 @@ import { build } from 'esbuild';
 // → +200 B (0.7.2): the spike detector reads the status log so thinking
 // output isn't the agent's norm (start-up false alarms), and pinned marker
 // labels carry the severity shape.
-const BUDGETS = { 'dist/index.js': 26_200, 'dist/index.cjs': 26_700 };
+// → +0.6 KB all exports / +0.3 KB chart-only (0.8.0): attention (an agent
+// that needs you, `onAttention`, "Needs you" in the badge and roster) and
+// cost (`cost` events, `costUsd`, the roster's Cost column).
+const BUDGETS = { 'dist/index.js': 27_000, 'dist/index.cjs': 27_400 };
 // The standalone detectors (detectAnomalies) on their own.
 const TREESHAKE_BUDGET = 2_500;
 
@@ -74,7 +77,7 @@ const entry = fileURLToPath(new URL('../dist/index.js', import.meta.url));
 
 // What an app that renders the chart from a stream ships: the other exports
 // (telemetry hook and components) must tree-shake away.
-const CHART_ONLY_BUDGET = 23_200; // +200 B in 0.7.2, see BUDGETS
+const CHART_ONLY_BUDGET = 23_600; // +200 B in 0.7.2, +400 B in 0.8.0, see BUDGETS
 {
   const out = await build({
     stdin: { contents: `export { AgentStat, useAgentStream } from ${JSON.stringify(entry)};`, resolveDir: '.' },

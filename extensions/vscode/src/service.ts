@@ -18,6 +18,10 @@ export type AgentView = {
   errors: number;
   health: number | null;
   anomalies: string[];
+  /** Waiting on you: why (service 0.5.0 and later). */
+  needsYou?: string;
+  /** US dollars reported for it (service 0.5.0 and later). */
+  costUsd?: number;
 };
 
 export type Snapshot = { agents: AgentView[] };

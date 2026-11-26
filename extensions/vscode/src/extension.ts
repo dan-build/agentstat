@@ -34,6 +34,7 @@ function bar(s: string, max?: number): string {
 }
 
 function statusWord(a: AgentView): string {
+  if (a.needsYou) return a.needsYou;
   return a.status === 'waiting' && a.tool ? `waiting on ${a.tool}` : a.status;
 }
 
@@ -49,8 +50,16 @@ function render(item: vscode.StatusBarItem, snap: Snapshot | null) {
   const agents = snap.agents;
   const working = agents.filter((a) => WORKING.has(a.status)).length;
   const troubled = agents.filter((a) => a.anomalies.length > 0);
+  // Waiting on you comes first: only you can unblock it.
+  const waiting = agents.filter((a) => a.needsYou);
   item.command = 'agentstat.show';
-  if (troubled.length) {
+  if (waiting.length) {
+    item.text =
+      waiting.length === 1
+        ? `$(bell) ${bar(waiting[0].name, 24)}: ${bar(waiting[0].needsYou ?? '', 40)}`
+        : `$(bell) ${waiting.length} need you`;
+    item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+  } else if (troubled.length) {
     item.text =
       troubled.length === 1
         ? `$(warning) ${bar(troubled[0].name, 24)}: ${bar(troubled[0].anomalies[0], 40)}`
@@ -67,7 +76,7 @@ function render(item: vscode.StatusBarItem, snap: Snapshot | null) {
   } else {
     tip.appendMarkdown('| Agent | Status | Tokens |\n|:--|:--|--:|\n');
     for (const a of agents) {
-      const warn = a.anomalies.length ? ' $(warning)' : '';
+      const warn = a.needsYou ? ' $(bell)' : a.anomalies.length ? ' $(warning)' : '';
       tip.appendMarkdown(
         `| ${md(a.name)}${warn} | ${md(statusWord(a), 60)} · ${duration(a.statusMs)} | ${Math.round(a.totalTokens).toLocaleString()} |\n`
       );

@@ -44,12 +44,16 @@ export function useSourceSubscription(store: AgentStore, source: AgentSource | u
       const now = performance.now();
       const n = store.list.length;
       if (m.type === 'event') {
+        // Cost is a total, not activity: it never brings back an agent that's gone.
+        if (m.event.type === 'cost' && !store.byId.has(m.id)) return;
         store.ensure(m.id, m.event.time ?? now, now);
         store.push(m.id, m.event, now);
       } else if (m.type === 'agent') {
         store.describe(m.id, m, now);
         store.publish();
-      } else {
+      } else if (m.type === 'attention') {
+        store.attention(m.id, m.reason, m.message, m.app, m.time ?? now);
+      } else if (m.type === 'remove') {
         store.removeAuto(m.id);
       }
       if (store.list.length !== n) store.publish();

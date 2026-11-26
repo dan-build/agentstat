@@ -63,6 +63,9 @@ pub struct Daemon {
     cfg: AnomalyConfig,
     /// When each agent was last heard from, for idle removal.
     last_seen: HashMap<String, f64>,
+    /// Agents waiting on the person: since when (event time), and why. Until
+    /// the agent does anything after asking, or is removed.
+    needs: HashMap<String, (f64, String)>,
     recent: Vec<RecentAnomaly>,
     /// What each agent did today (and the past week's files).
     history: History,
@@ -124,6 +127,7 @@ impl Daemon {
             codex: Mapper::new(Tool::Codex),
             cfg: AnomalyConfig::default(),
             last_seen: HashMap::new(),
+            needs: HashMap::new(),
             recent: Vec::new(),
             instance: format!("{:08x}", (seed.wrapping_mul(0x9e3779b97f4a7c15) >> 32) as u32),
         }
@@ -134,9 +138,20 @@ impl Daemon {
         match &m.body {
             MsgBody::Event { id, event } => {
                 let t = event.time().unwrap_or(now);
-                self.store.ensure(id, t, now);
+                // Cost is a total, not activity: it never adds an agent that
+                // is gone, or counts as hearing from one.
+                let cost = matches!(event, agentstat_core::Event::Cost { .. });
+                if !cost {
+                    self.store.ensure(id, t, now);
+                }
                 self.store.push(id, event, now);
-                self.last_seen.insert(id.clone(), now);
+                if !cost {
+                    self.last_seen.insert(id.clone(), now);
+                    // Anything the agent does after asking means it was answered.
+                    if self.needs.get(id).is_some_and(|(since, _)| t > *since) {
+                        self.needs.remove(id);
+                    }
+                }
                 let name = self.store.agent(id).map(|a| a.name.as_str());
                 if let Some(r) = self.history.record(id, name, now) {
                     match event {
@@ -144,6 +159,9 @@ impl Daemon {
                             r.output_tokens += c
                         }
                         agentstat_core::Event::ToolStart { .. } => r.tools += 1,
+                        agentstat_core::Event::Cost { usd: Some(u), .. } if u.is_finite() && *u > 0.0 => {
+                            r.cost_usd += u
+                        }
                         agentstat_core::Event::ToolEnd { error: Some(true), .. }
                         | agentstat_core::Event::Error { .. } => r.errors += 1,
                         _ => {}
@@ -157,11 +175,17 @@ impl Daemon {
                 self.history.record(id, name.as_deref(), now);
             }
             MsgBody::Remove { id } => {
+                self.needs.remove(id);
                 self.open_episodes.retain(|(a, _)| a != id);
                 self.store.remove(id);
                 self.last_seen.remove(id);
                 self.claude.forget(id);
                 self.codex.forget(id);
+            }
+            MsgBody::Attention { id, reason: Reason::NeedsYou, message, time, .. } => {
+                if self.store.agent(id).is_some() {
+                    self.needs.insert(id.clone(), (*time, message.clone()));
+                }
             }
             MsgBody::Attention { .. } => {}
         }
@@ -216,12 +240,16 @@ impl Daemon {
                 Output::Attention { id, reason, message, app, time } => {
                     self.log.attention(&id, reason, message, app, time)
                 }
+                // On the stream too, so every client can show what an agent cost;
+                // for an agent already gone, in the day's history only.
                 Output::Cost { id, usd } => {
-                    let name = self.store.agent(&id).map(|a| a.name.clone());
-                    if let Some(r) = self.history.record(&id, name.as_deref(), now) {
-                        r.cost_usd += usd;
+                    if self.store.agent(&id).is_none() {
+                        if let Some(r) = self.history.record(&id, None, now) {
+                            r.cost_usd += usd;
+                        }
+                        continue;
                     }
-                    continue;
+                    self.log.push(&id, agentstat_core::Event::Cost { usd: Some(usd), time: None }, now)
                 }
             };
             self.apply(&m, now);
@@ -301,7 +329,12 @@ impl Daemon {
         let excess = self.recent.len().saturating_sub(RECENT_ANOMALIES);
         self.recent.drain(..excess);
         let idle: Vec<String> =
-            self.last_seen.iter().filter(|(_, t)| now - **t > IDLE_REMOVE_MS).map(|(id, _)| id.clone()).collect();
+            // An agent waiting on the person is quiet, not gone.
+            self.last_seen
+                .iter()
+                .filter(|(id, t)| now - **t > IDLE_REMOVE_MS && !self.needs.contains_key(*id))
+                .map(|(id, _)| id.clone())
+                .collect();
         for id in idle {
             let m = self.log.remove(&id, now);
             self.apply(&m, now);
@@ -372,6 +405,8 @@ impl Daemon {
                     errors: a.current.error_count.unwrap_or(0.0),
                     health: self.store.health(&a.id).map(|h| h.score),
                     anomalies: self.store.anomalies(&a.id).iter().map(|x| x.message.clone()).collect(),
+                    needs_you: self.needs.get(&a.id).map(|(_, m)| m.clone()),
+                    cost_usd: stats.as_ref().map_or(0.0, |s| s.cost_usd),
                 }
             })
             .collect();
@@ -399,6 +434,12 @@ pub struct AgentView {
     pub errors: f64,
     pub health: Option<f64>,
     pub anomalies: Vec<String>,
+    /// Waiting on the person: why ("needs your permission for Bash").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs_you: Option<String>,
+    /// US dollars reported for it since the service first saw it.
+    #[serde(default)]
+    pub cost_usd: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -527,6 +568,9 @@ struct StreamQuery {
 /// message, its event's age when sent (and its `since`'s), and the send time.
 fn frame(instance: &str, m: &Message, now: f64) -> Bytes {
     let mut wire = serde_json::json!({ "m": m, "sent": now });
+    if let MsgBody::Attention { time, .. } = &m.body {
+        wire["age"] = (now - time).max(0.0).into();
+    }
     if let MsgBody::Event { event, .. } = &m.body {
         if let Some(t) = event.time() {
             wire["age"] = (now - t).max(0.0).into();

@@ -31,7 +31,7 @@ import type {
 import { DEFAULT_CAP, HEALTH_TICK_MS, HIT_RADIUS, PAD, clamp } from './core/constants';
 import { emaPoints } from './core/curve';
 import { AgentStore, type RowSnapshot } from './core/store';
-import type { AgentSource } from './stream';
+import type { AgentAttention, AgentSource, AttentionReason } from './stream';
 import { useSourceSubscription } from './ui/useSource';
 import type { AgentRecord } from './core/record';
 import { computeView, pointsFor, primaryBuffer, type View } from './core/view';
@@ -162,6 +162,12 @@ export interface AgentStatProps {
    * removed), with the last reading of it.
    */
   onAnomalyEnd?: (agentId: string, anomaly: Anomaly) => void;
+  /**
+   * An agent of `source` needs attention now (needs you, done, failed,
+   * stalled, runaway, budget): fresh ones only, not history replayed on
+   * connect. "Needs you" is also announced to screen readers.
+   */
+  onAttention?: (agentId: string, attention: AgentAttention) => void;
 }
 
 export interface AgentStatRef {
@@ -283,6 +289,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
     anomalyConfig,
     onAnomaly,
     onAnomalyEnd,
+    onAttention,
   }: AgentStatProps,
   ref: React.ForwardedRef<AgentStatRef>
 ) {
@@ -333,6 +340,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
     anomalyConfig: { ...DEFAULT_ANOMALY_CONFIG, ...anomalyConfig } as AnomalyConfig,
     onAnomaly,
     onAnomalyEnd,
+    onAttention,
     onHealthChange,
     onPointClick: onPointClick ?? onSpikeClick,
   });
@@ -348,6 +356,7 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
       anomalyConfig: { ...DEFAULT_ANOMALY_CONFIG, ...anomalyConfig },
       onAnomaly,
       onAnomalyEnd,
+      onAttention,
       onHealthChange,
       onPointClick: onPointClick ?? onSpikeClick,
     };
@@ -501,6 +510,13 @@ const AgentStat = /*#__PURE__*/ forwardRef(function AgentStat(
           L.onHealthChange?.(ev.id, { ...ev.health });
         }
       });
+      for (const a of store.takeAttention(performance.now())) {
+        L.onAttention?.(a.id, { reason: a.reason as AttentionReason, message: a.message, app: a.app, time: a.time });
+        if (a.reason === 'needs-you') {
+          const name = store.byId.get(a.id)?.name ?? a.id;
+          setAnnouncement(`${name} ${a.message}.`);
+        }
+      }
       // The DOM overlays don't need updates nobody can see.
       if (typeof document === 'undefined' || !document.hidden) store.publish();
     }, HEALTH_TICK_MS);

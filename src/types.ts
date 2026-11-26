@@ -159,7 +159,13 @@ export type AgentEvent =
   /** Something failed. Increments `errorCount`. */
   | { type: 'error'; time?: number }
   /** The run finished. Status → `complete`; open tool calls are closed. */
-  | { type: 'finish'; time?: number };
+  | { type: 'finish'; time?: number }
+  /**
+   * What some work cost, in US dollars, added to the agent's total
+   * (`costUsd`). Changes nothing else: not the status, and not when the agent
+   * was last heard from.
+   */
+  | { type: 'cost'; usd: number; time?: number };
 
 /** What AgentStat derived from an agent's events (see `AgentEvent`). */
 export type AgentStreamStats = {
@@ -173,4 +179,6 @@ export type AgentStreamStats = {
   tool: string | null;
   /** How long the agent has been in its current status, in ms. */
   statusMs: number;
+  /** US dollars from `cost` events since the agent was added. */
+  costUsd: number;
 };

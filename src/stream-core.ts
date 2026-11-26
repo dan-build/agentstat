@@ -9,6 +9,27 @@ import type { Agent, AgentEvent } from './types';
 import { warnOnce } from './core/constants';
 
 /**
+ * Why an agent needs attention:
+ * - `needs-you`: waiting on the person (a permission prompt, a question),
+ *   until it does anything after asking.
+ * - `done`: finished a long turn. `failed`: a turn ended in an error.
+ * - `stalled`, `runaway`: a critical stall or runaway.
+ * - `budget`: the day's cost or tokens reached a share of the budget.
+ */
+export type AttentionReason = 'needs-you' | 'done' | 'failed' | 'stalled' | 'runaway' | 'budget';
+
+/** Something the person should know about an agent now. */
+export type AgentAttention = {
+  reason: AttentionReason;
+  /** Short, for a notification: "needs your permission for Bash". */
+  message: string;
+  /** The app the agent runs in (a macOS bundle id), to bring it forward. */
+  app?: string;
+  /** In the `performance.now()` clock (default: now). */
+  time?: number;
+};
+
+/**
  * What a source delivers to a chart. `seq` increases by one per message, and
  * messages are delivered in `seq` order.
  */
@@ -16,6 +37,7 @@ export type AgentStreamMessage = { seq: number } & (
   | { type: 'event'; id: string; event: AgentEvent }
   | { type: 'agent'; id: string; name?: string; color?: string; config?: Agent['config'] }
   | { type: 'remove'; id: string }
+  | ({ type: 'attention'; id: string } & AgentAttention)
 );
 
 /** Anything a chart can subscribe to (`createAgentStream()` returns one). */
@@ -37,6 +59,8 @@ export interface AgentStream extends AgentSource {
   describe(agentId: string, info: { name?: string; color?: string; config?: Agent['config'] }): void;
   /** Remove an agent added by its events from subscribed charts. */
   remove(agentId: string): void;
+  /** Tell subscribers an agent needs attention (see `AttentionReason`). */
+  attention(agentId: string, attention: AgentAttention): void;
 }
 
 /** History kept for charts that subscribe later. */
@@ -107,6 +131,20 @@ export function createAgentStream(): AgentStream {
       const m = { name: prev?.name, color: prev?.color, config: prev?.config, ...d, seq: ++seq, type: 'agent' as const, id };
       info.set(id, m);
       emit(m);
+    },
+    attention(id, a) {
+      if (typeof id !== 'string' || !a || typeof a.reason !== 'string' || typeof a.message !== 'string') return;
+      const now = clock();
+      const time = typeof a.time === 'number' && Number.isFinite(a.time) ? Math.min(a.time, now) : now;
+      emit({
+        seq: ++seq,
+        type: 'attention',
+        id,
+        reason: a.reason,
+        message: a.message,
+        ...(typeof a.app === 'string' ? { app: a.app } : {}),
+        time,
+      });
     },
     remove(id) {
       if (typeof id !== 'string') return;

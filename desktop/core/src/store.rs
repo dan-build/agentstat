@@ -66,6 +66,8 @@ pub struct StreamStats {
     pub tool: Option<String>,
     /// Time in the current status (ms).
     pub status_ms: f64,
+    /// US dollars from `cost` events since the agent was added.
+    pub cost_usd: f64,
 }
 
 /// Per-agent state for agents fed with events.
@@ -151,6 +153,8 @@ struct AgentState {
     stream: Option<Stream>,
     /// Added by a stream (not by the caller's roster).
     auto: bool,
+    /// Total of its `cost` events, in US dollars.
+    cost_usd: f64,
 }
 
 /// Telemetry state for a roster of agents.
@@ -220,6 +224,7 @@ impl Store {
             work_since: now,
             stream: None,
             auto,
+            cost_usd: 0.0,
         });
         self.agents.len() - 1
     }
@@ -398,6 +403,14 @@ impl Store {
     /// Apply a stream event: derive rate, TTFT, inter-token latency and status.
     pub fn push(&mut self, id: &str, e: &Event, now: f64) {
         let Some(i) = self.index(id) else { return };
+        // Cost adds to a total and nothing else: it doesn't touch the stream,
+        // so it never moves the status or when the agent was last heard.
+        if let Event::Cost { usd, .. } = e {
+            if let Some(usd) = usd.filter(|u| u.is_finite() && *u >= 0.0) {
+                self.agents[i].cost_usd += usd;
+            }
+            return;
+        }
         let retain = self.retention_ms();
         let a = &mut self.agents[i];
         let mut s = a.stream.take().unwrap_or_else(|| Stream::new(now));
@@ -543,6 +556,8 @@ impl Store {
                 s.last_tok = None;
                 set_status(a, Status::Complete, false);
             }
+            // Handled in `push`, before the stream is touched.
+            Event::Cost { .. } => {}
         }
         let throttle = matches!(e, Event::Tokens { .. });
         Self::sample_stream(a, s, t, throttle, retain);
@@ -767,6 +782,7 @@ impl Store {
             inter_token_ms: s.and_then(|s| s.itl),
             tool: s.and_then(|s| s.tools.last().cloned()),
             status_ms: (now - a.status_since).max(0.0),
+            cost_usd: a.cost_usd,
         })
     }
 }

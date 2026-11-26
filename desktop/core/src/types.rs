@@ -124,6 +124,14 @@ pub enum Event {
         #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
         time: Option<f64>,
     },
+    /// What some work cost, in US dollars, added to the agent's total. Changes
+    /// nothing else: not the status, and not when the agent was last heard.
+    Cost {
+        #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
+        usd: Option<f64>,
+        #[serde(default, deserialize_with = "lenient::opt", skip_serializing_if = "Option::is_none")]
+        time: Option<f64>,
+    },
 }
 
 impl Event {
@@ -134,7 +142,8 @@ impl Event {
             | Event::ToolStart { time, .. }
             | Event::ToolEnd { time, .. }
             | Event::Error { time }
-            | Event::Finish { time } => *time,
+            | Event::Finish { time }
+            | Event::Cost { time, .. } => *time,
         }
     }
 }

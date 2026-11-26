@@ -1,6 +1,6 @@
 'use client';
 
-import { Activity, Brain, CircleCheck, CirclePause, Hourglass, TriangleAlert, type LucideIcon } from 'lucide-react';
+import { Activity, BellRing, Brain, CircleCheck, CirclePause, Hourglass, TriangleAlert, type LucideIcon } from 'lucide-react';
 import type { AgentStatus, AgentTelemetry } from '@dan-build/agentstat';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
@@ -27,7 +27,7 @@ export function formatDuration(ms: number) {
 /** Warning or critical, from the agent's anomalies and status. */
 export function agentTone(agent: AgentTelemetry): 'warning' | 'critical' | undefined {
   if (agent.anomalies.some((a) => a.severity === 'critical') || agent.status === 'hallucinating') return 'critical';
-  if (agent.anomalies.length || agent.status === 'stuck') return 'warning';
+  if (agent.anomalies.length || agent.status === 'stuck' || agent.needsYou) return 'warning';
   return undefined;
 }
 
@@ -35,6 +35,21 @@ export function agentTone(agent: AgentTelemetry): 'warning' | 'critical' | undef
 export function AgentStatusBadge({ agent, className }: { agent: AgentTelemetry; className?: string }) {
   const { label, icon: Icon } = AGENT_STATUS[agent.status];
   const tone = agentTone(agent);
+  // Waiting on the person comes first: it's the one thing only they can fix.
+  if (agent.needsYou) {
+    return (
+      <Badge
+        variant="outline"
+        className={cn('max-w-full gap-1.5 font-medium whitespace-nowrap text-amber-700 dark:text-amber-400', className)}
+      >
+        <BellRing aria-hidden="true" className="size-3 shrink-0" />
+        <span title={agent.needsYou.message}>Needs you</span>
+        <span className="sr-only">({agent.needsYou.message})</span>
+        <span aria-hidden="true">·</span>
+        <span className="tabular-nums">{formatDuration(agent.needsYou.sinceMs)}</span>
+      </Badge>
+    );
+  }
   return (
     <Badge
       variant="outline"

@@ -32,6 +32,13 @@ export const formatAxisValue = (v: number): string =>
     : '–';
 
 /** Integer, e.g. a health score. */
+/** US dollars: "$0.0123" under a cent, "$0.42", "$12.30", "$1,204". */
+export const formatCost = (usd: number): string => {
+  if (!Number.isFinite(usd)) return '–';
+  const digits = usd < 0.01 ? 4 : usd < 1_000 ? 2 : 0;
+  return `$${usd.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+};
+
 export const formatInt = (v: number): string => (Number.isFinite(v) ? intFmt().format(v) : '–');
 
 /** Age of a sample: `now`, `2.4 s ago`, `1 m 05 s ago`. */

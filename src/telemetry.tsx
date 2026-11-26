@@ -6,12 +6,12 @@ import React, { useEffect, useRef, useState } from 'react';
 import { AgentStore } from './core/store';
 import { HEALTH_TICK_MS } from './core/constants';
 import { DEFAULT_ANOMALY_CONFIG, type Anomaly, type AnomalyConfig } from './anomaly';
-import type { AgentSource } from './stream';
+import type { AgentAttention, AgentSource, AttentionReason } from './stream';
 import type { Agent, AgentStatus, HealthMetrics } from './types';
 import { useSourceSubscription } from './ui/useSource';
 import { useMediaQuery } from './ui/hooks';
 import { StatusIcon } from './ui/StatusIcon';
-import { formatInt, formatRate, formatStatus } from './format';
+import { formatCost, formatInt, formatRate, formatStatus } from './format';
 import { tokensFor, FONT_SANS, FONT_MONO, type ThemeMode } from './theme';
 
 /** One agent's live telemetry. */
@@ -35,6 +35,13 @@ export type AgentTelemetry = {
   perCall: boolean;
   /** Anomalies active now (empty with detection off). */
   anomalies: Anomaly[];
+  /** US dollars from `cost` events since the agent was added. */
+  costUsd: number;
+  /**
+   * Waiting on the person (a `needs-you` attention), until it does anything
+   * after asking: why, and for how long (ms). null otherwise.
+   */
+  needsYou: { message: string; sinceMs: number; app?: string } | null;
   /**
    * Status history within `historySeconds`, oldest first: each status and
    * how long ago it began and ended (ms; end 0 = now).
@@ -55,6 +62,12 @@ export interface TelemetryOptions {
   /** An anomaly that was reported has ended. */
   onAnomalyEnd?: (agentId: string, anomaly: Anomaly) => void;
   onHealthChange?: (agentId: string, health: HealthMetrics) => void;
+  /**
+   * An agent needs attention now (needs you, done, failed, stalled, runaway,
+   * budget), as a source reports it: fresh ones only, not history replayed
+   * on connect. For notifications.
+   */
+  onAttention?: (agentId: string, attention: AgentAttention) => void;
 }
 
 const NO_AGENTS: Agent[] = [];
@@ -99,6 +112,9 @@ export function useAgentTelemetry(source: AgentSource | undefined, options: Tele
         else if (ev.kind === 'resolved') o.onAnomalyEnd?.(ev.id, { ...ev.anomaly });
         else o.onHealthChange?.(ev.id, { ...ev.health });
       });
+      for (const a of store.takeAttention(now)) {
+        o.onAttention?.(a.id, { reason: a.reason as AttentionReason, message: a.message, app: a.app, time: a.time });
+      }
       if (typeof document !== 'undefined' && document.hidden) return;
       setAgents(
         store.list.map((r) => {
@@ -116,6 +132,11 @@ export function useAgentTelemetry(source: AgentSource | undefined, options: Tele
             health: store.getHealth(r.id)?.score ?? null,
             perCall: store.calls.has(r.id),
             anomalies: store.getAnomalies(r.id),
+            costUsd: stats?.costUsd ?? 0,
+            needsYou: (() => {
+              const n = store.needs.get(r.id);
+              return n ? { message: n.message, sinceMs: Math.max(0, now - n.since), ...(n.app ? { app: n.app } : {}) } : null;
+            })(),
             history: changes
               .map((c, i) => ({
                 status: c.status,
@@ -230,11 +251,23 @@ const formatSpan = (ms: number) => {
 const toneOf = (a: AgentTelemetry): 'warning' | 'critical' | undefined =>
   a.anomalies.some((x) => x.severity === 'critical') || a.status === 'hallucinating'
     ? 'critical'
-    : a.anomalies.length || a.status === 'stuck'
+    : a.anomalies.length || a.status === 'stuck' || a.needsYou
       ? 'warning'
       : undefined;
 
 function BadgeBody({ agent }: { agent: AgentTelemetry }) {
+  // Waiting on the person comes first: it's the one thing only they can fix.
+  if (agent.needsYou) {
+    return (
+      <>
+        <StatusIcon status="waiting" />
+        <span title={agent.needsYou.message}>Needs you</span>
+        <span className="agentstat-sr">({agent.needsYou.message})</span>
+        <span aria-hidden="true">·</span>
+        <span className="agentstat-n">{formatSpan(agent.needsYou.sinceMs)}</span>
+      </>
+    );
+  }
   return (
     <>
       <StatusIcon status={agent.status} />
@@ -375,6 +408,9 @@ export function AgentRoster({
   caption?: string;
 } & TelemetryComponentProps) {
   const root = useRoot(themed, 'agentstat-roster-wrap');
+  // A cost column only when some agent reports cost.
+  const cost = agents.some((a) => a.costUsd > 0);
+  const widths = cost ? ['24%', '32%', '11%', '11%', '11%', '11%'] : ['28%', '36%', '12%', '12%', '12%'];
   return (
     // Scrolls sideways when narrow: focusable, so the keyboard can scroll it.
     <div {...root} role="region" aria-label={caption} tabIndex={0}>
@@ -382,11 +418,9 @@ export function AgentRoster({
       <table className="agentstat-roster">
         <caption className="agentstat-sr">{caption}</caption>
         <colgroup>
-          <col style={{ width: '28%' }} />
-          <col style={{ width: '36%' }} />
-          <col style={{ width: '12%' }} />
-          <col style={{ width: '12%' }} />
-          <col style={{ width: '12%' }} />
+          {widths.map((w, i) => (
+            <col key={i} style={{ width: w }} />
+          ))}
         </colgroup>
         <thead>
           <tr>
@@ -401,6 +435,11 @@ export function AgentRoster({
             <th scope="col" className="agentstat-n">
               Health
             </th>
+            {cost && (
+              <th scope="col" className="agentstat-n">
+                Cost
+              </th>
+            )}
           </tr>
         </thead>
         <tbody>
@@ -424,6 +463,11 @@ export function AgentRoster({
               <td className="agentstat-n" title={a.perCall ? PER_CALL_TITLE : undefined}>
                 {a.health === null || a.perCall ? '–' : formatInt(a.health)}
               </td>
+              {cost && (
+                <td className="agentstat-n" title={a.costUsd > 0 ? formatCost(a.costUsd) : undefined}>
+                  {a.costUsd > 0 ? formatCost(a.costUsd) : '–'}
+                </td>
+              )}
             </tr>
           ))}
         </tbody>

@@ -13,6 +13,7 @@ import {
   useAgentTelemetry,
   type AgentEvent,
   type AgentStream,
+  type AttentionReason,
 } from '../../../../src/index';
 
 declare function acquireVsCodeApi(): { postMessage(m: unknown): void };
@@ -41,7 +42,8 @@ const local = (t: unknown) => (typeof t === 'number' ? performance.now() - (Date
 type Message =
   | { seq: number; type: 'event'; id: string; event: AgentEvent & { since?: number } }
   | { seq: number; type: 'agent'; id: string; name?: string; color?: string; config?: { expectedTokensPerSec?: [number, number] } }
-  | { seq: number; type: 'remove'; id: string };
+  | { seq: number; type: 'remove'; id: string }
+  | { seq: number; type: 'attention'; id: string; reason: AttentionReason; message: string; app?: string; time?: number };
 
 function apply(stream: AgentStream, m: Message) {
   if (m.type === 'event') {
@@ -50,7 +52,9 @@ function apply(stream: AgentStream, m: Message) {
     stream.push(m.id, e);
   } else if (m.type === 'agent') {
     stream.describe(m.id, { name: m.name, color: m.color, config: m.config });
-  } else {
+  } else if (m.type === 'attention') {
+    stream.attention(m.id, { reason: m.reason, message: m.message, app: m.app, time: local(m.time) });
+  } else if (m.type === 'remove') {
     stream.remove(m.id);
   }
 }

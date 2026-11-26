@@ -135,6 +135,9 @@ const sameRows = (a: RowSnapshot[], b: RowSnapshot[]) =>
       Math.abs(p.rate - b[i].rate) < 0.05
   );
 
+/** Attention older than this when it arrives is history, not news. */
+const ATTENTION_FRESH_MS = 30_000;
+
 export class AgentStore {
   /** Roster in display order. */
   list: AgentRecord[] = [];
@@ -189,6 +192,11 @@ export class AgentStore {
   private _statusSince = new Map<string, number>();
   private _workSince = new Map<string, number>();
   private _streams = new Map<string, Stream>();
+  // Total of each agent's `cost` events, in US dollars.
+  private _cost = new Map<string, number>();
+  // Agents waiting on the person (a `needs-you` attention): since when, and why.
+  readonly needs = new Map<string, { since: number; message: string; app?: string }>();
+  private _attention: { id: string; reason: string; message: string; app?: string; time: number }[] = [];
   // History the detectors need for the current config.
   private _detectorHistoryMs = DETECTOR_HISTORY_MS;
   // Rate at/below which output counts as none (the detectors' current config).
@@ -363,6 +371,8 @@ export class AgentStore {
     this._sourced.delete(id);
     this.progressKnown.delete(id);
     this._streams.delete(id);
+    this._cost.delete(id);
+    this.needs.delete(id);
     this.calls.delete(id);
     this._sim.delete(id);
   }
@@ -493,6 +503,16 @@ export class AgentStore {
     }
     const bad = (what: string) => warnOnce(`${id}:ev:${what}`, `push("${id}"): ignored ${what}.`);
     if (!e || typeof e !== 'object') return bad('a non-object event');
+    // Cost adds to a total and nothing else: it doesn't touch the stream, so
+    // it never moves the status or when the agent was last heard.
+    if (e.type === 'cost') {
+      if (typeof e.usd !== 'number' || !Number.isFinite(e.usd) || e.usd < 0) return bad('a cost event without a finite usd');
+      this._cost.set(id, (this._cost.get(id) ?? 0) + e.usd);
+      return;
+    }
+    // Anything the agent does after asking means it was answered.
+    const asked = this.needs.get(id);
+    if (asked && (typeof e.time === 'number' ? e.time : now) > asked.since) this.needs.delete(id);
     let s = this._streams.get(id);
     if (!s) {
       s = { win: [], total: 0, t: -Infinity, arrived: now, lastSample: -Infinity, ttftFrom: null, ttft: null, lastTok: null, from: -Infinity, n: 0, itl: null, tools: [] };
@@ -916,7 +936,29 @@ export class AgentStore {
       interTokenMs: s?.itl ?? null,
       tool: s?.tools.length ? s.tools[s.tools.length - 1] : null,
       statusMs: Math.max(0, now - (this._statusSince.get(id) ?? now)),
+      costUsd: this._cost.get(id) ?? 0,
     };
+  }
+
+  /**
+   * An agent waiting on the person (`needs-you`), until it does anything
+   * after `time` or is removed. Other reasons are notices, kept nowhere.
+   */
+  attention(id: string, reason: string, message: string, app: string | undefined, time: number): void {
+    if (!this.byId.has(id)) return;
+    if (reason === 'needs-you') this.needs.set(id, { since: time, message, ...(app ? { app } : {}) });
+    this._attention.push({ id, reason, message, ...(app ? { app } : {}), time });
+    if (this._attention.length > 200) this._attention.splice(0, this._attention.length - 200);
+  }
+
+  /**
+   * Attention received since the last call, fresh ones only: history replayed
+   * on (re)connect was either seen already or is too old to act on.
+   */
+  takeAttention(now: number): { id: string; reason: string; message: string; app?: string; time: number }[] {
+    const out = this._attention.filter((a) => now - a.time < ATTENTION_FRESH_MS);
+    this._attention = [];
+    return out;
   }
 
   getLiveMetrics(id: string): (LiveValues & { progressKnown: boolean }) | undefined {
