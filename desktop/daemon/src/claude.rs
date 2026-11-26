@@ -61,6 +61,7 @@ pub enum Tool {
     #[default]
     Claude,
     Codex,
+    Cursor,
 }
 
 impl Tool {
@@ -73,6 +74,7 @@ impl Tool {
         match self {
             Tool::Claude => "claude:",
             Tool::Codex => "codex:",
+            Tool::Cursor => "cursor:",
         }
     }
 
@@ -81,6 +83,7 @@ impl Tool {
         match self {
             Tool::Claude => "Claude Code",
             Tool::Codex => "Codex",
+            Tool::Cursor => "Cursor",
         }
     }
 }
@@ -138,6 +141,10 @@ struct Session {
     /// When the model call in flight started (Codex reports its tokens
     /// separately from its timing).
     call_since: Option<f64>,
+    /// Cursor: it reports prompts (the editor does; its CLI doesn't).
+    prompted: bool,
+    /// When a hook last came for it.
+    heard: f64,
 }
 
 /// Turns one coding agent's hooks and telemetry into AgentStat events.
@@ -436,6 +443,31 @@ impl Mapper {
     /// [`map_hook`](Self::map_hook), with the bundle id of the app the session
     /// runs in (Terminal, iTerm, VS Code, …) when the plugin sent it.
     pub fn map_hook_in(&mut self, v: &serde_json::Value, app: Option<&str>, now: f64) -> Vec<Output> {
+        if self.tool == Tool::Cursor {
+            return crate::cursor::translate(self, v)
+                .iter()
+                .flat_map(|shaped| self.map_shaped(shaped, app, now))
+                .collect();
+        }
+        self.map_shaped(v, app, now)
+    }
+
+    /// Whether a session has a tool call open with this id (Cursor's turn marker).
+    #[cfg(test)]
+    pub(crate) fn has_open(&self, key: &str, tool_use_id: &str) -> bool {
+        self.sessions.get(key).is_some_and(|s| s.tools.iter().any(|(id, _)| id == tool_use_id))
+    }
+
+    /// A Cursor session, if known: whether a turn is open, and whether it
+    /// reports prompts.
+    pub(crate) fn cursor_state(&self, key: &str) -> Option<(bool, bool)> {
+        let s = self.sessions.get(key)?;
+        Some((s.tools.iter().any(|(id, _)| id == crate::cursor::TURN), s.prompted))
+    }
+
+    /// One hook call in Claude Code's shape (Codex's are already; Cursor's
+    /// are translated first).
+    fn map_shaped(&mut self, v: &serde_json::Value, app: Option<&str>, now: f64) -> Vec<Output> {
         let agent = self.tool;
         let mut out = Vec::new();
         let str_of = |k: &str| v.get(k).and_then(|x| x.as_str()).filter(|x| !x.is_empty() && x.len() <= MAX_ID_LEN);
@@ -475,6 +507,10 @@ impl Mapper {
             }
         }
         let s = self.sessions.get_mut(&key).expect("inserted above");
+        s.heard = now;
+        if v.get("agentstat_prompt").and_then(|b| b.as_bool()) == Some(true) {
+            s.prompted = true;
+        }
         let t = Some(now);
         let mut events = Vec::new();
         if let Some(a) = app.filter(|a| {
@@ -524,7 +560,7 @@ impl Mapper {
                     .tools
                     .iter()
                     .rposition(|(u, _)| !use_id.is_empty() && u == use_id)
-                    .or_else(|| s.tools.iter().rposition(|(_, n)| *n == name));
+                    .or_else(|| s.tools.iter().rposition(|(u, n)| *n == name && u != crate::cursor::TURN));
                 match open {
                     Some(i) => {
                         s.tools.remove(i);
@@ -624,6 +660,23 @@ impl Mapper {
     pub fn flush(&mut self, now: f64) -> Vec<Output> {
         let mut out = Vec::new();
         for (sid, s) in &mut self.sessions {
+            // A Cursor turn that went quiet without its stop (the CLI sends
+            // none; a prompt another hook blocked): over, well before it
+            // would count as stalled. The next tool reopens it.
+            let quiet = if s.prompted { crate::cursor::QUIET_PROMPTED_MS } else { crate::cursor::QUIET_MS };
+            if self.tool == Tool::Cursor
+                && now - s.heard >= quiet
+                && let Some(i) = s.tools.iter().position(|(id, _)| id == crate::cursor::TURN)
+            {
+                s.tools.remove(i);
+                let mut events = vec![Event::ToolEnd { name: Some(String::new()), error: None, time: Some(now) }];
+                if s.tools.is_empty() {
+                    s.idle = true;
+                    s.turn_since = None;
+                    events.push(Event::Finish { time: Some(now) });
+                }
+                emit(self.tool, sid, s, events, &mut out);
+            }
             if let Some((t, received)) = s.finish
                 && now - received >= FINISH_DELAY_MS
             {

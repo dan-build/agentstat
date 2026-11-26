@@ -8,6 +8,7 @@
 //!   agentstat serve              run the service in the foreground
 //!   agentstat connect claude     set Claude Code up to report here (asks first)
 //!   agentstat connect codex      the same for Codex
+//!   agentstat connect cursor     the same for Cursor
 //!   agentstat service install    start the service at login
 //!   agentstat doctor             check that everything is in place
 
@@ -30,6 +31,8 @@ Get started:
   agentstat connect codex        The same for Codex: points its telemetry here
                                  and adds hooks for live turns and tools (trust
                                  them once in Codex: /hooks, then t).
+  agentstat connect cursor       The same for Cursor: hooks for live turns and
+                                 tools (Cursor reports no tokens or cost).
   agentstat doctor               Check that everything is in place.
 
 Usage:
@@ -51,7 +54,7 @@ Usage:
   agentstat serve [--port N]     Run the service in the foreground.
   agentstat service install|uninstall|status
                                  Start the service at login (launchd), or stop.
-  agentstat disconnect claude|codex
+  agentstat disconnect claude|codex|cursor
                                  Undo `connect` (asks first).
 
 The service listens on 127.0.0.1 only (default port 4318, or $AGENTSTAT_PORT).
@@ -276,7 +279,7 @@ fn fit(s: &str, w: usize) -> String {
 fn table(snap: &Snapshot) -> String {
     let mut out = String::new();
     if snap.agents.is_empty() {
-        out.push_str("No agents yet. Connect one with: agentstat connect claude (or codex)\n");
+        out.push_str("No agents yet. Connect one with: agentstat connect claude (or codex, cursor)\n");
         return out;
     }
     out.push_str(&format!(

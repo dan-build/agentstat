@@ -60,6 +60,7 @@ pub struct Daemon {
     store: Store,
     claude: Mapper,
     codex: Mapper,
+    cursor: Mapper,
     cfg: AnomalyConfig,
     /// When each agent was last heard from, for idle removal.
     last_seen: HashMap<String, f64>,
@@ -125,6 +126,7 @@ impl Daemon {
             store: Store::new(Vec::new(), StoreOptions::default(), now_ms()),
             claude: Mapper::new(Tool::Claude),
             codex: Mapper::new(Tool::Codex),
+            cursor: Mapper::new(Tool::Cursor),
             cfg: AnomalyConfig::default(),
             last_seen: HashMap::new(),
             needs: HashMap::new(),
@@ -181,6 +183,7 @@ impl Daemon {
                 self.last_seen.remove(id);
                 self.claude.forget(id);
                 self.codex.forget(id);
+                self.cursor.forget(id);
             }
             MsgBody::Attention { id, reason: Reason::NeedsYou, message, time, .. } => {
                 if self.store.agent(id).is_some() {
@@ -222,6 +225,7 @@ impl Daemon {
         let mapper = match tool {
             Tool::Claude => &mut self.claude,
             Tool::Codex => &mut self.codex,
+            Tool::Cursor => &mut self.cursor,
         };
         let out = mapper.map_hook_in(body, app, now);
         self.emit(out, now)
@@ -261,6 +265,7 @@ impl Daemon {
     pub fn tick(&mut self, now: f64) {
         let mut finished = self.claude.flush(now);
         finished.extend(self.codex.flush(now));
+        finished.extend(self.cursor.flush(now));
         self.emit(finished, now);
         for e in self.store.health_tick(now, true, &self.cfg) {
             let (id, name, a, resolved) = match e {
@@ -279,7 +284,8 @@ impl Daemon {
                     None
                 };
                 if let Some(reason) = reason {
-                    let app = self.claude.app_of(&id).or_else(|| self.codex.app_of(&id));
+                    let app =
+                        self.claude.app_of(&id).or_else(|| self.codex.app_of(&id)).or_else(|| self.cursor.app_of(&id));
                     self.log.attention(&id, reason, a.message.clone(), app, now);
                 }
             }
@@ -468,6 +474,7 @@ pub fn router(state: Shared, port: u16) -> Router {
         .route("/v1/logs", post(logs))
         .route("/v1/hooks/claude", post(hook).layer(DefaultBodyLimit::max(MAX_HOOK_BODY)))
         .route("/v1/hooks/codex", post(codex_hook).layer(DefaultBodyLimit::max(MAX_HOOK_BODY)))
+        .route("/v1/hooks/cursor", post(cursor_hook).layer(DefaultBodyLimit::max(MAX_HOOK_BODY)))
         // Accepted so exporters configured for every signal don't error; not read yet.
         .route("/v1/metrics", post(|| async { Json(serde_json::json!({})) }))
         .route("/v1/traces", post(|| async { Json(serde_json::json!({})) }))
@@ -528,6 +535,11 @@ async fn hook(state: State<Shared>, headers: HeaderMap, body: Bytes) -> Response
 /// A Codex hook (the commands `agentstat connect codex` adds post each one's JSON input).
 async fn codex_hook(state: State<Shared>, headers: HeaderMap, body: Bytes) -> Response {
     hook_from(Tool::Codex, state, headers, body)
+}
+
+/// A Cursor hook (the commands `agentstat connect cursor` adds post each one's JSON input).
+async fn cursor_hook(state: State<Shared>, headers: HeaderMap, body: Bytes) -> Response {
+    hook_from(Tool::Cursor, state, headers, body)
 }
 
 fn hook_from(tool: Tool, State(state): State<Shared>, headers: HeaderMap, body: Bytes) -> Response {

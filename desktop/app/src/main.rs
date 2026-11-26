@@ -569,7 +569,13 @@ fn swatch(color: Hsla) -> impl IntoElement {
 /// Which agent a session is, when it isn't Claude Code (the default):
 /// sessions of two agents in one project otherwise read the same.
 fn source_tag(id: &str) -> Option<&'static str> {
-    id.starts_with("codex:").then_some("Codex")
+    if id.starts_with("codex:") {
+        Some("Codex")
+    } else if id.starts_with("cursor:") {
+        Some("Cursor")
+    } else {
+        None
+    }
 }
 
 fn tag_label(tag: &'static str, theme: &Theme) -> impl IntoElement {
@@ -1021,7 +1027,7 @@ impl AgentStatApp {
                     "The agentstat command isn't installed",
                     "Install it with the script on agentstat.sdaniel.cc/docs/macos-app",
                 ),
-                _ => ("No agents yet", "Connect an agent in a terminal: agentstat connect claude (or codex)"),
+                _ => ("No agents yet", "Connect an agent in a terminal: agentstat connect claude (or codex, cursor)"),
             };
             return div()
                 .flex_1()
