@@ -7,18 +7,36 @@
 
 **See when your AI agents stall, run away or thrash — live.**
 
-[Live demo](https://agentstat.sdaniel.cc/) · [Docs](https://agentstat.sdaniel.cc/docs/overview/) · [macOS app](#the-macos-app) · [Changelog](./CHANGELOG.md)
+[Get the Mac app](#on-your-mac) · [React component](#in-your-own-agent-ui) · [Live demo](https://agentstat.sdaniel.cc/) · [Docs](https://agentstat.sdaniel.cc/docs/overview/) · [Changelog](./CHANGELOG.md)
 
 AgentStat watches agents while they run and says, in plain words, when one has
 stopped producing while it still claims to be working, when its output runs
-away, or when its status keeps flipping. It comes in two forms:
+away, or when its status keeps flipping.
 
-- **A React component** for your own agent UI: token rate, status and health on
-  one canvas, about 22 KB min+gzip, no dependencies besides React.
-  [Quick start ↓](#quick-start)
-- **A macOS app and command line** for the coding agents on your machine:
-  every Claude Code, Codex, Cursor and Gemini CLI session, live, local only.
-  [Get the app ↓](#the-macos-app)
+## On your Mac
+
+A menu bar app for every Claude Code, Codex, Cursor and Gemini CLI session on
+your machine. It shows each one live and tells you when one is stuck: it says
+it's working, but nothing is coming out. It also tells you when one is waiting
+on you, and for Claude Code and Codex, what the day has cost so far.
+
+<img src="https://raw.githubusercontent.com/dan-build/agentstat/main/docs/app.png" alt="AgentStat on a Mac with demo sessions from Claude Code, Codex, Cursor and Gemini CLI in one window. The menu bar says “1 needs you” and a notification says “web · needs you: needs your permission for shell”." width="100%">
+
+```bash
+curl -fsSL https://github.com/dan-build/agentstat/releases/download/app-v0.5.0/install.sh | sh -s -- --app
+agentstat connect claude   # or codex, cursor, gemini
+```
+
+macOS 12 or later, Apple Silicon and Intel. Everything stays on your Mac: the
+service listens on 127.0.0.1 and sends nothing anywhere. The app isn't
+notarized by Apple, on purpose, so [here's how to check it
+yourself](#verify-dont-trust). [Everything the app does ↓](#the-macos-app)
+
+## In your own agent UI
+
+A React component for the agents in your own product: token rate, status and
+health on one canvas, about 22 KB min+gzip, no dependencies besides React.
+[Quick start ↓](#quick-start)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/dan-build/agentstat/main/docs/demo-dark.png">
@@ -607,12 +625,8 @@ Evergreen browsers from 2022 on: Chrome/Edge 94+, Firefox 93+, Safari 15.4+.
 A native app and an `agentstat` command for watching the agents on your own
 machine: Claude Code, Codex, Cursor and Gemini CLI sessions (and their
 subagents, where the agent reports them), and anything that speaks
-OpenTelemetry through `agentstat run`. macOS 12 or later, Apple Silicon and Intel.
-
-```bash
-curl -fsSL https://github.com/dan-build/agentstat/releases/download/app-v0.5.0/install.sh | sh -s -- --app
-agentstat connect claude
-```
+OpenTelemetry through `agentstat run`. Install it with the two commands
+[at the top](#on-your-mac).
 
 The installer checks every file against the release's checksums before
 installing, puts `agentstat` in `~/.local/bin`, and with `--app` puts
